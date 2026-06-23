@@ -2,192 +2,210 @@
 
 Minimal PICO 4 Ultra controller reader.
 
-The APK reads the left and right controller grip poses, plus button states, in
-the headset-relative OpenXR `VIEW` space. It sends the data to the PC over USB
-through `adb reverse`. The PC receiver can publish ROS 2 topics, record CSV, and
-optionally open a tiny browser visualizer.
+The APK reads two controller grip poses and button states in headset-relative
+OpenXR `VIEW` space, then sends them to the PC over USB with `adb reverse`.
+The PC side can publish ROS 2 topics, record CSV, and optionally show a browser
+visualizer.
 
 This project does not use ALVR.
 
+## Prebuilt APK
+
+The repository already contains a compiled APK:
+
+```text
+apk/generated_apk/pico_head_relative_pose.apk
+```
+
+Use this first. You only need the APK build toolchain if you want to modify and
+rebuild the headset app.
+
 ## Install dependencies
 
-### Windows
+### Windows, no ROS 2
 
-For receiving data without ROS:
+Install Python:
 
-```text
-Python
-ADB
+```powershell
+winget install -e --id Python.Python.3.12
 ```
 
-For browser visualization:
+Install ADB platform-tools:
 
-```text
-aiohttp
+```powershell
+mkdir C:\Android -Force
+curl.exe -L --fail -o C:\Android\platform-tools.zip https://dl.google.com/android/repository/platform-tools-latest-windows.zip
+Expand-Archive C:\Android\platform-tools.zip C:\Android -Force
+$env:Path = "C:\Android\platform-tools;$env:Path"
 ```
 
-For native ROS 2 publishing on Windows, this repository currently expects the
-prepared Jazzy/Pixi layout:
+Install the optional browser dependency:
 
-```text
-C:\pixi_ws
-+- pixi.toml
-`- ros2-windows\
+```powershell
+python -m pip install aiohttp
 ```
 
-`run_windows_ros.cmd` uses Pixi's Python 3.12.3, loads
-`C:\pixi_ws\ros2-windows\local_setup.bat`, and then runs `pc\run.py`.
+### Windows, native ROS 2 Jazzy
 
-The system Python is not used for ROS 2 on Windows.
+Install Pixi:
+
+```powershell
+powershell -ExecutionPolicy Bypass -Command "iwr -useb https://pixi.sh/install.ps1 | iex"
+$env:Path = "$env:USERPROFILE\.pixi\bin;$env:Path"
+```
+
+Create the ROS 2 workspace expected by `run_windows_ros.cmd`:
+
+```powershell
+mkdir C:\pixi_ws -Force
+cd C:\pixi_ws
+curl.exe -L --fail -o pixi.toml https://raw.githubusercontent.com/ros2/ros2/jazzy/pixi.toml
+& "$env:USERPROFILE\.pixi\bin\pixi.exe" install
+```
+
+Download and extract the tested ROS 2 Jazzy Windows binary:
+
+```powershell
+curl.exe -L --fail -o ros2-jazzy-20260128-windows-release-amd64.zip https://github.com/ros2/ros2/releases/download/release-jazzy-20260128/ros2-jazzy-20260128-windows-release-amd64.zip
+if ((Get-FileHash .\ros2-jazzy-20260128-windows-release-amd64.zip -Algorithm SHA256).Hash.ToLower() -ne "97684cf478af8947429f089de7b55d3037e006f05f3faafb21082a47956f5a9a") { throw "bad ROS zip hash" }
+Expand-Archive .\ros2-jazzy-20260128-windows-release-amd64.zip C:\pixi_ws -Force
+& "$env:USERPROFILE\.pixi\bin\pixi.exe" add aiohttp
+```
+
+Quick check:
+
+```powershell
+& "$env:USERPROFILE\.pixi\bin\pixi.exe" run cmd /d /s /c "call C:\pixi_ws\ros2-windows\local_setup.bat && python -c ""import rclpy; import geometry_msgs; import std_msgs; print('ROS ok')"""
+```
 
 ### Ubuntu
 
-For receiving data without ROS:
+Install PC-side tools:
 
 ```bash
-sudo apt install adb python3
+sudo apt update
+sudo apt install -y adb python3 python3-pip python3-aiohttp curl software-properties-common
 ```
 
-For browser visualization:
+Install ROS 2 apt source:
 
 ```bash
-sudo apt install python3-aiohttp
+sudo add-apt-repository universe
+export ROS_APT_SOURCE_VERSION=$(curl -s https://api.github.com/repos/ros-infrastructure/ros-apt-source/releases/latest | grep -F tag_name | cut -d\" -f4)
+curl -L -o /tmp/ros2-apt-source.deb "https://github.com/ros-infrastructure/ros-apt-source/releases/download/${ROS_APT_SOURCE_VERSION}/ros2-apt-source_${ROS_APT_SOURCE_VERSION}.$(. /etc/os-release && echo $VERSION_CODENAME)_all.deb"
+sudo dpkg -i /tmp/ros2-apt-source.deb
+sudo apt update
 ```
 
-For ROS 2 publishing, install ROS 2 Jazzy or Humble and the standard Python
-message packages:
+Install Jazzy runtime packages:
 
 ```bash
-sudo apt install \
-  ros-$ROS_DISTRO-rclpy \
-  ros-$ROS_DISTRO-geometry-msgs \
-  ros-$ROS_DISTRO-std-msgs
+sudo apt install -y ros-jazzy-ros-base ros-jazzy-rclpy ros-jazzy-geometry-msgs ros-jazzy-std-msgs
 ```
 
-The Ubuntu receiver does not need Pixi.
+For Humble, replace `jazzy` with `humble` in the package names and run with
+`ROS_DISTRO=humble`.
 
 ### APK build toolchain
 
-APK compilation is currently set up for Windows through `apk/build.ps1`.
+APK rebuilding is currently Windows-only in this repository.
 
-The script uses the project-local Android/Rust/JDK toolchain expected under:
-
-```text
-read_pico/toolchains/
-```
-
-Ubuntu can run the PC receiver, but this repository does not yet provide a
-Linux APK build script. A future `apk/build.sh` would need the same pieces:
+`apk/build.ps1` expects an ignored local toolchain directory:
 
 ```text
-JDK 17
-Rust
-Android SDK
-Android NDK
-Android build-tools
-cargo target aarch64-linux-android
+toolchains/
 ```
+
+Expected pieces:
+
+```text
+JDK 17.0.19+10
+Rust + cargo-apk
+Android SDK platform android-31
+Android build-tools 32.0.0
+Android NDK 25.1.8937393
+Android platform-tools
+```
+
+No Linux APK build script is provided yet.
 
 ## Run
 
-### Build the APK
+Install the APK:
 
-Windows:
+```bash
+adb install -r apk/generated_apk/pico_head_relative_pose.apk
+```
+
+Start the app on the PICO headset.
+
+Build the APK on the prepared Windows workspace only if needed:
 
 ```powershell
 cd apk
 .\build.ps1
 ```
 
-The built APK is written to:
-
-```text
-apk/generated_apk/pico_head_relative_pose.apk
-```
-
-### Install the APK
-
-```bash
-adb install -r apk/generated_apk/pico_head_relative_pose.apk
-```
-
-Start the app on the PICO headset after installation.
-
-### Start without visualization
-
-With ROS 2 enabled:
+Start the PC receiver without visualization:
 
 ```bash
 python pc/run.py --vr-port 9100
 ```
 
-Without ROS 2:
+Start without ROS 2:
 
 ```bash
 python pc/run.py --vr-port 9100 --no-ros
 ```
 
-`--vr-port` is the PC TCP port receiving live PICO data.
-
-Internally the receiver creates:
-
-```text
-PICO tcp:29761 -> adb reverse -> PC tcp:<vr-port>
-```
-
-### Start with browser visualization
+Start with browser visualization:
 
 ```bash
 python pc/run.py --vr-port 9100 --visualize --visualize-port 8765
 ```
 
-`--visualize-port` is only the local browser HTTP/WebSocket port.
-
-The two ports must both be within `1..65535`, and they must be different when
-visualization is enabled.
-
-### Windows ROS 2 shortcut
+Windows ROS shortcut:
 
 ```bat
 run_windows_ros.cmd --vr-port 9100
 run_windows_ros.cmd --vr-port 9100 --visualize --visualize-port 8765
 ```
 
-### Ubuntu ROS 2 shortcut
-
-Jazzy is the default:
+Ubuntu ROS shortcut:
 
 ```bash
 ./run_ubuntu_ros.sh --vr-port 9100
-```
-
-For Humble:
-
-```bash
 ROS_DISTRO=humble ./run_ubuntu_ros.sh --vr-port 9100
 ```
 
-### Record CSV
+Record CSV:
 
 ```bash
 python pc/run.py --vr-port 9100 --record
 ```
 
-CSV files are written under:
+Port meanings:
 
 ```text
-recordings/
+--vr-port         PC TCP port receiving PICO data.
+--visualize-port  Local browser HTTP/WebSocket port.
 ```
 
-### ROS 2 topics
+The receiver creates:
 
-The node name is:
+```text
+PICO tcp:29761 -> adb reverse -> PC tcp:<vr-port>
+```
+
+## ROS 2 topics
+
+Node:
 
 ```text
 read_pico
 ```
 
-Published topics:
+Topics:
 
 ```text
 /read_pico/poses      geometry_msgs/PoseArray
@@ -206,23 +224,18 @@ buttons.data = [left_buttons, right_buttons]
 tracked.data = [left_valid, right_valid]
 ```
 
-The topics use sensor-data QoS. `PoseArray` timestamps are assigned on the PC
-when the frame is received.
-
-If a controller is not tracked, its pose is zero position with identity
-orientation. Consumers should trust `tracked`, not the zero pose.
+The topics use sensor-data QoS. Pose timestamps are assigned on the PC when a
+frame is received.
 
 ## Data format
 
-Each TCP frame is one CSV line with 19 columns:
+Each TCP frame is one 19-column CSV line:
 
 ```text
 timestamp,left_valid,lx,ly,lz,lqx,lqy,lqz,lqw,right_valid,rx,ry,rz,rqx,rqy,rqz,rqw,left_buttons,right_buttons
 ```
 
-Positions are in metres. Quaternions use `(x,y,z,w)`.
-
-The coordinate frame is OpenXR `VIEW` space:
+OpenXR `VIEW` frame:
 
 ```text
 +X = right
@@ -231,23 +244,11 @@ The coordinate frame is OpenXR `VIEW` space:
 origin = headset view
 ```
 
-Button bitmasks:
+Button masks:
 
 ```text
-left:
-  bit 0 = X
-  bit 1 = Y
-  bit 2 = Menu
-  bit 3 = Trigger
-  bit 4 = Grip
-  bit 5 = Thumbstick
-
-right:
-  bit 0 = A
-  bit 1 = B
-  bit 2 = Trigger
-  bit 3 = Grip
-  bit 4 = Thumbstick
+left:  bit0 X, bit1 Y, bit2 Menu, bit3 Trigger, bit4 Grip, bit5 Thumbstick
+right: bit0 A, bit1 B,            bit2 Trigger, bit3 Grip, bit4 Thumbstick
 ```
 
 ## File layout
@@ -256,62 +257,48 @@ right:
 read_pico/
 +- run_windows_ros.cmd
 +- run_ubuntu_ros.sh
-+- README.md
 +- pc/
-|  +- run.py
-|  `- view.html
+|  +- run.py       # receiver, ADB reverse, ROS, CSV, optional web
+|  `- view.html    # tiny Canvas visualizer
 +- apk/
-|  +- AndroidManifest.xml
-|  +- build.ps1
-|  +- Cargo.toml
-|  +- src/
-|  |  +- lib.rs
-|  |  +- net.rs
-|  |  +- display.rs
-|  |  `- egl.rs
-|  +- assets/
-|  |  +- connected.rgba
-|  |  `- disconnected.rgba
-|  +- generated_apk/
-|  |  `- pico_head_relative_pose.apk
-|  +- runtime_libs/
-|  `- java/com/mmhand/pico_head_relative_pose/MainActivity.java
+|  +- build.ps1    # Windows APK build
+|  +- generated_apk/pico_head_relative_pose.apk
+|  `- src/
+|     +- lib.rs     # OpenXR loop
+|     +- net.rs     # TCP reconnect/send
+|     +- display.rs # headset status image
+|     `- egl.rs     # EGL/OpenGL setup
 `- recordings/
-```
-
-Important files:
-
-```text
-pc/run.py        PC receiver, ADB reverse, ROS publisher, optional CSV/web.
-pc/view.html     Small Canvas visualizer.
-
-apk/src/lib.rs   OpenXR session and per-frame pose/button readout.
-apk/src/net.rs   TCP reconnect and CSV sending.
-apk/src/display.rs
-                 Headset connected/disconnected status image.
-apk/src/egl.rs   EGL/OpenGL setup.
 ```
 
 ## Code logic
 
-Runtime path:
-
 ```text
 PICO OpenXR app
-  -> read left/right grip pose
-  -> read left/right buttons
-  -> format one 19-column CSV line
-  -> TCP connect to 127.0.0.1:29761 on the headset
-  -> adb reverse maps that to PC --vr-port
-  -> pc/run.py receives and validates the frame
-  -> optional ROS 2 publish
-  -> optional browser visualization
-  -> optional CSV recording
+  -> read left/right pose and buttons
+  -> send one CSV line to headset tcp:29761
+  -> adb reverse forwards it to PC --vr-port
+  -> pc/run.py validates the frame
+  -> publish ROS 2 topics, optionally visualize or record
 ```
 
-The APK treats TCP write success as `CONNECTED`; failed write or no socket means
-`DISCONNECTED`. The headset display shows only that state.
+The browser uses the latest received frame and draws with
+`requestAnimationFrame`, so rendering does not block TCP receiving.
 
-The browser visualizer is deliberately separate from the TCP receive path. It
-uses the latest received frame and draws with `requestAnimationFrame`, so slow
-browser rendering does not block pose receiving.
+## Git ignore policy
+
+Tracked:
+
+```text
+apk/generated_apk/pico_head_relative_pose.apk
+```
+
+Ignored:
+
+```text
+toolchains/
+apk/target/
+recordings/*.csv
+__pycache__/
+*.pyc
+```
