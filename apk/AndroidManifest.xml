@@ -1,0 +1,38 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.mmhand.pico_head_relative_pose"
+    android:versionCode="16777474"
+    android:versionName="0.2.1">
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="31" />
+    <uses-feature android:name="android.hardware.vr.headtracking" android:required="true" android:version="1" />
+    <uses-feature android:glEsVersion="0x00030002" android:required="true" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="org.khronos.openxr.permission.OPENXR" />
+    <uses-permission android:name="org.khronos.openxr.permission.OPENXR_SYSTEM" />
+    <queries>
+        <intent><action android:name="org.khronos.openxr.OpenXRRuntimeService" /></intent>
+    </queries>
+    <application
+        android:debuggable="true"
+        android:hasCode="true"
+        android:label="PICO Head Relative Pose"
+        android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
+        <meta-data android:name="pvr.app.type" android:value="vr" />
+        <meta-data android:name="pvr.sdk.version" android:value="OpenXR" />
+        <meta-data android:name="pxr.sdk.version_code" android:value="590" />
+        <activity
+            android:name="com.mmhand.pico_head_relative_pose.MainActivity"
+            android:configChanges="density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|uiMode"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:resizeableActivity="false"
+            android:screenOrientation="landscape"
+            android:stateNotNeeded="true">
+            <meta-data android:name="android.app.lib_name" android:value="pico_head_relative_pose" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="org.khronos.openxr.intent.category.IMMERSIVE_HMD" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

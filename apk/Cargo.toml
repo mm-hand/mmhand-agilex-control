@@ -1,0 +1,81 @@
+[package]
+name = "pico_head_relative_pose"
+version = "0.2.1"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+# Keep this standalone package out of ALVR's parent workspace.
+[workspace]
+resolver = "2"
+
+[dependencies]
+android-activity = { version = "=0.6.0", features = ["native-activity"] }
+android_logger = "0.14"
+jni = "0.21"
+khronos-egl = { version = "6", features = ["dynamic"] }
+log = "0.4"
+ndk-context = "0.1"
+openxr = { git = "https://github.com/Ralith/openxrs", rev = "9270509d23dc774b43a8b7289e8adf69fcac6828" }
+
+[package.metadata.android]
+package = "com.mmhand.pico_head_relative_pose"
+build_targets = ["aarch64-linux-android"]
+runtime_libs = "runtime_libs"
+
+[package.metadata.android.sdk]
+min_sdk_version = 26
+target_sdk_version = 31
+
+[[package.metadata.android.uses_feature]]
+name = "android.hardware.vr.headtracking"
+required = true
+version = 1
+
+[[package.metadata.android.uses_feature]]
+opengles_version = [3, 2]
+required = true
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.INTERNET"
+
+[[package.metadata.android.uses_permission]]
+name = "org.khronos.openxr.permission.OPENXR"
+
+[[package.metadata.android.uses_permission]]
+name = "org.khronos.openxr.permission.OPENXR_SYSTEM"
+
+[[package.metadata.android.queries.intent]]
+actions = ["org.khronos.openxr.OpenXRRuntimeService"]
+
+[package.metadata.android.application]
+debuggable = true
+has_code = true
+theme = "@android:style/Theme.Black.NoTitleBar.Fullscreen"
+label = "PICO Head Relative Pose"
+
+[package.metadata.android.application.activity]
+config_changes = "density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|uiMode"
+launch_mode = "singleTask"
+name = "com.mmhand.pico_head_relative_pose.MainActivity"
+orientation = "landscape"
+resizeable_activity = false
+
+[[package.metadata.android.application.activity.intent_filter]]
+actions = ["android.intent.action.MAIN"]
+categories = ["android.intent.category.LAUNCHER", "org.khronos.openxr.intent.category.IMMERSIVE_HMD"]
+
+[[package.metadata.android.application.meta_data]]
+name = "pvr.app.type"
+value = "vr"
+
+[[package.metadata.android.application.meta_data]]
+name = "pvr.sdk.version"
+value = "OpenXR"
+
+[[package.metadata.android.application.meta_data]]
+name = "pxr.sdk.version_code"
+value = "590"

@@ -1,0 +1,28 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PICO controller poses</title>
+<style>
+html,body,canvas{margin:0;width:100%;height:100%;overflow:hidden;background:#090b10;color:#ddd;font:14px monospace}#status{position:fixed;left:14px;top:12px;white-space:pre;pointer-events:none}#buttons{position:fixed;left:14px;bottom:14px}.row{margin-top:8px}.key{display:inline-block;margin:2px;padding:5px 8px;border:1px solid #38404d;border-radius:4px;color:#68717e}.key.on{color:#fff;border-color:#7ad;background:#235170}.right .key.on{border-color:#f8a;background:#702d48}
+</style>
+<canvas></canvas><div id="status">waiting for poses...</div><div id="buttons"></div>
+<script>
+const canvas=document.querySelector('canvas'),ctx=canvas.getContext('2d'),status=document.querySelector('#status'),buttons=document.querySelector('#buttons');
+let last=performance.now(),frames=0,fps=0,stamp=0,masks=[0,0];
+const hands=[{name:'LEFT',color:'#55aaff',valid:false,pose:null,trail:[]},{name:'RIGHT',color:'#ff6688',valid:false,pose:null,trail:[]}];
+const keys=[['X','Y','MENU','TRIGGER','GRIP','STICK'],['A','B','TRIGGER','GRIP','STICK']];
+buttons.innerHTML=keys.map((row,i)=>`<div class="row ${i?'right':''}">${hands[i].name}: `+row.map((key,bit)=>`<span class="key" data-hand="${i}" data-bit="${bit}">${key}</span>`).join('')+'</div>').join('');
+new WebSocket(`ws://${location.host}/ws`).onmessage=e=>{
+  const v=e.data.split(',').map(Number);if(v.length!==19)return;stamp=v[0];masks=[v[17],v[18]];
+  update(hands[0],v.slice(1,9));update(hands[1],v.slice(9,17));
+  document.querySelectorAll('.key').forEach(k=>k.classList.toggle('on',!!(masks[k.dataset.hand]&(1<<k.dataset.bit))));
+};
+function update(h,v){h.valid=!!v[0];if(h.valid){h.pose={p:v.slice(1,4),q:v.slice(4,8)};h.trail.push(h.pose.p);if(h.trail.length>100)h.trail.shift()}}
+function rotate(q,v){const [x,y,z,w]=q,[a,b,c]=v,tx=2*(y*c-z*b),ty=2*(z*a-x*c),tz=2*(x*b-y*a);return[a+w*tx+y*tz-z*ty,b+w*ty+z*tx-x*tz,c+w*tz+x*ty-y*tx]}
+function project([x,y,z]){const s=Math.min(innerWidth,innerHeight)*.62;return[innerWidth/2+s*(x-.45*z),innerHeight*.43-s*(y+.18*z)]}
+function line(a,b,color,width=1){a=project(a);b=project(b);ctx.strokeStyle=color;ctx.lineWidth=width;ctx.beginPath();ctx.moveTo(...a);ctx.lineTo(...b);ctx.stroke()}
+function grid(){for(let i=-5;i<=5;i++){line([i/5,-.5,-1],[i/5,-.5,.5],'#202630');line([-1,-.5,i/10],[1,-.5,i/10],'#202630')}line([0,0,0],[.15,0,0],'#d44',2);line([0,0,0],[0,.15,0],'#4d4',2);line([0,0,0],[0,0,-.15],'#48f',2)}
+function drawHand(h){if(!h.pose)return;const p=h.pose.p,q=h.pose.q,c=h.valid?h.color:'#777';if(h.trail.length>1){ctx.strokeStyle=c+'88';ctx.beginPath();h.trail.map(project).forEach((v,i)=>i?ctx.lineTo(...v):ctx.moveTo(...v));ctx.stroke()}const axes=[[[.12,0,0],'#f44'],[[0,.12,0],'#4f4'],[[0,0,.12],'#48f']];for(const[a,col]of axes){const d=rotate(q,a);line(p,[p[0]+d[0],p[1]+d[1],p[2]+d[2]],h.valid?col:'#777',3)}const s=project(p);ctx.fillStyle=c;ctx.beginPath();ctx.arc(...s,6,0,7);ctx.fill();ctx.fillText(h.name,s[0]+9,s[1]-8)}
+function frame(now){frames++;const d=now-last;if(d>500){fps=Math.round(frames*1000/d);frames=0;last=now}const ratio=devicePixelRatio||1,w=innerWidth*ratio,h=innerHeight*ratio;if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h}ctx.setTransform(ratio,0,0,ratio,0,0);ctx.clearRect(0,0,innerWidth,innerHeight);grid();hands.forEach(drawHand);status.textContent=`VIEW frame (+X right, +Y up, -Z forward)\n${hands.map(h=>h.name+': '+(h.valid?'tracked':'lost')).join('  ')}\nrender: ${fps} fps  timestamp: ${stamp.toFixed(3)}`;requestAnimationFrame(frame)}
+requestAnimationFrame(frame);
+</script>
