@@ -84,27 +84,37 @@ Install PC-side tools:
 
 ```bash
 sudo apt update
-sudo apt install -y adb python3 python3-pip python3-aiohttp curl software-properties-common
+sudo apt install -y adb python3 python3-aiohttp wget
 ```
 
-Install ROS 2 apt source:
+Install ROS 2 with FishROS:
 
 ```bash
-sudo add-apt-repository universe
-export ROS_APT_SOURCE_VERSION=$(curl -s https://api.github.com/repos/ros-infrastructure/ros-apt-source/releases/latest | grep -F tag_name | cut -d\" -f4)
-curl -L -o /tmp/ros2-apt-source.deb "https://github.com/ros-infrastructure/ros-apt-source/releases/download/${ROS_APT_SOURCE_VERSION}/ros2-apt-source_${ROS_APT_SOURCE_VERSION}.$(. /etc/os-release && echo $VERSION_CODENAME)_all.deb"
-sudo dpkg -i /tmp/ros2-apt-source.deb
-sudo apt update
+source <(wget -qO- http://fishros.com/install)
 ```
 
-Install Jazzy runtime packages:
+In the menu, choose ROS/ROS2 installation. Use Jazzy on Ubuntu 24.04 and Humble
+on Ubuntu 22.04.
+
+After installation, make sure these message packages exist.
+
+Jazzy:
 
 ```bash
-sudo apt install -y ros-jazzy-ros-base ros-jazzy-rclpy ros-jazzy-geometry-msgs ros-jazzy-std-msgs
+source /opt/ros/jazzy/setup.bash
+sudo apt install -y ros-jazzy-rclpy ros-jazzy-geometry-msgs ros-jazzy-std-msgs
 ```
 
-For Humble, replace `jazzy` with `humble` in the package names and run with
-`ROS_DISTRO=humble`.
+Humble:
+
+```bash
+source /opt/ros/humble/setup.bash
+sudo apt install -y ros-humble-rclpy ros-humble-geometry-msgs ros-humble-std-msgs
+```
+
+FishROS is convenient, especially on China mainland networks. If you need a
+fully deterministic install path, use the official ROS 2 Ubuntu apt guide
+instead.
 
 ### APK build toolchain
 
