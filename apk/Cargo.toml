@@ -8,7 +8,6 @@ license = "MIT"
 [lib]
 crate-type = ["cdylib"]
 
-# Keep this standalone package out of ALVR's parent workspace.
 [workspace]
 resolver = "2"
 
