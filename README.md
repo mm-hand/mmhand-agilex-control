@@ -134,6 +134,14 @@ orientation = gravity-aligned, head yaw only (no pitch/roll)
 ground plane = XZ
 ```
 
+Controller grip frame (per controller):
+
+```text
+origin = grip point of the controller
++X = right, +Y = up, -Z = forward (when held naturally)
+pose = controller origin expressed in the horizon frame
+```
+
 Button masks:
 
 ```text
