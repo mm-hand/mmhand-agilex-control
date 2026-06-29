@@ -228,7 +228,7 @@ fn run(running: Arc<AtomicBool>) -> Result<(), String> {
     let mut events = xr::EventDataBuffer::new();
     let mut active = false;
     let mut sender = net::Sender::new();
-    info!("ready: VIEW-relative poses -> 127.0.0.1:29761");
+    info!("ready: horizon-relative poses -> 127.0.0.1:29761");
     while running.load(Ordering::Relaxed) {
         while let Some(event) = instance.poll_event(&mut events).map_err(err)? {
             if let xr::Event::SessionStateChanged(e) = event {
@@ -273,8 +273,16 @@ fn run(running: Arc<AtomicBool>) -> Result<(), String> {
                 .map(|v| v.pose)
         };
         let head = locate(&view_space);
-        let left = head.zip(locate(&left_space)).map(|(h, c)| relative(h, c));
-        let right = head.zip(locate(&right_space)).map(|(h, c)| relative(h, c));
+        let horizon_head = head.map(|h| xr::Posef {
+            position: h.position,
+            orientation: yaw_only(h.orientation),
+        });
+        let left = horizon_head
+            .zip(locate(&left_space))
+            .map(|(h, c)| relative(h, c));
+        let right = horizon_head
+            .zip(locate(&right_space))
+            .map(|(h, c)| relative(h, c));
         let (left_buttons, right_buttons) = button_masks(&buttons, &session);
         let connected = sender.send(left, right, left_buttons, right_buttons);
         end_frame(
@@ -293,6 +301,17 @@ fn run(running: Arc<AtomicBool>) -> Result<(), String> {
 
 fn err(e: impl std::fmt::Debug) -> String {
     format!("{e:?}")
+}
+
+fn yaw_only(q: xr::Quaternionf) -> xr::Quaternionf {
+    // Twist-around-Y decomposition: keep only the yaw component of the head
+    // orientation. LOCAL is gravity-aligned (+Y up), so this drops pitch/roll
+    // and yields a horizon-aligned frame that still follows head yaw.
+    let len = (q.y * q.y + q.w * q.w).sqrt();
+    if len < 1e-6 {
+        return xr::Quaternionf { x: 0.0, y: 0.0, z: 0.0, w: 1.0 };
+    }
+    xr::Quaternionf { x: 0.0, y: q.y / len, z: 0.0, w: q.w / len }
 }
 
 fn relative(head: xr::Posef, controller: xr::Posef) -> xr::Posef {

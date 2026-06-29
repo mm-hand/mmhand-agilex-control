@@ -1,5 +1,4 @@
 /apk/target/
-/toolchains/
 /apk/generated_apk/*
 !/apk/generated_apk/.gitkeep
 !/apk/generated_apk/pico_head_relative_pose.apk

@@ -56,7 +56,7 @@ class RosPublisher:
     def publish(self, frame):
         poses = self.PoseArray()
         poses.header.stamp = self.node.get_clock().now().to_msg()
-        poses.header.frame_id = "pico_head"
+        poses.header.frame_id = "pico_horizon"
         poses.poses = [self._pose(frame, 1), self._pose(frame, 9)]
         self.poses.publish(poses)
         self.buttons.publish(self.UInt32MultiArray(data=[frame[17], frame[18]]))

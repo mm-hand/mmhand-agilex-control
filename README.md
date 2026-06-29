@@ -2,9 +2,10 @@
 
 Minimal PICO 4 Ultra controller reader.
 
-The APK reads two controller grip poses and button states in headset-relative
-OpenXR `VIEW` space, then sends them to the PC over USB with `adb reverse`.
-The PC side can publish ROS 2 topics, record CSV, and optionally show a browser
+The APK reads two controller grip poses and button states in a gravity-aligned
+horizon frame (origin at the head, yaw-only, no pitch/roll) derived from OpenXR
+`LOCAL` space, then sends them to the PC over USB with `adb reverse`. The PC
+side can publish ROS 2 topics, record CSV, and optionally show a browser
 visualizer.
 
 This project does not use ALVR.
@@ -118,26 +119,32 @@ instead.
 
 ### APK build toolchain
 
-APK rebuilding is currently Windows-only in this repository.
+APK rebuilding is Ubuntu-only in this repository. Install the toolchain at
+system level:
 
-`apk/build.ps1` expects an ignored local toolchain directory:
-
-```text
-toolchains/
+```bash
+sudo apt update
+sudo apt install -y openjdk-17-jdk
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+cargo install cargo-apk
 ```
 
-Expected pieces:
+Install the Android SDK via `sdkmanager` (Android Studio's command-line tools
+bundle it), then accept licenses and add these components:
 
-```text
-JDK 17.0.19+10
-Rust + cargo-apk
-Android SDK platform android-31
-Android build-tools 32.0.0
-Android NDK 25.1.8937393
-Android platform-tools
+```bash
+sdkmanager "platform-tools" "platforms;android-31" "build-tools;32.0.0" "ndk;25.1.8937393"
 ```
 
-No Linux APK build script is provided yet.
+`apk/build.sh` locates the toolchain through these environment variables (shown
+with their defaults; override as needed):
+
+```text
+JAVA_HOME           /usr/lib/jvm/java-17-openjdk-amd64
+ANDROID_HOME        $HOME/Android/Sdk
+ANDROID_NDK_HOME    $ANDROID_HOME/ndk/25.1.8937393
+```
 
 ## Run
 
@@ -149,11 +156,11 @@ adb install -r apk/generated_apk/pico_head_relative_pose.apk
 
 Start the app on the PICO headset.
 
-Build the APK on the prepared Windows workspace only if needed:
+Build the APK on the prepared Ubuntu workspace only if needed:
 
-```powershell
+```bash
 cd apk
-.\build.ps1
+./build.sh
 ```
 
 Start the PC receiver without visualization:
@@ -228,7 +235,7 @@ Conventions:
 ```text
 poses.poses[0] = left
 poses.poses[1] = right
-poses.header.frame_id = "pico_head"
+poses.header.frame_id = "pico_horizon"
 
 buttons.data = [left_buttons, right_buttons]
 tracked.data = [left_valid, right_valid]
@@ -245,13 +252,15 @@ Each TCP frame is one 19-column CSV line:
 timestamp,left_valid,lx,ly,lz,lqx,lqy,lqz,lqw,right_valid,rx,ry,rz,rqx,rqy,rqz,rqw,left_buttons,right_buttons
 ```
 
-OpenXR `VIEW` frame:
+Horizon frame (derived from OpenXR `LOCAL`):
 
 ```text
 +X = right
 +Y = up
 -Z = forward
-origin = headset view
+origin = head position (follows the head, including height)
+orientation = gravity-aligned, head yaw only (no pitch/roll)
+ground plane = XZ
 ```
 
 Button masks:
@@ -271,10 +280,10 @@ read_pico/
 |  +- run.py       # receiver, ADB reverse, ROS, CSV, optional web
 |  `- view.html    # tiny Canvas visualizer
 +- apk/
-|  +- build.ps1    # Windows APK build
+|  +- build.sh     # Ubuntu APK build
 |  +- generated_apk/pico_head_relative_pose.apk
 |  `- src/
-|     +- lib.rs     # OpenXR loop
+|     +- lib.rs     # OpenXR loop, yaw-only horizon frame
 |     +- net.rs     # TCP reconnect/send
 |     +- display.rs # headset status image
 |     `- egl.rs     # EGL/OpenGL setup
@@ -285,7 +294,9 @@ read_pico/
 
 ```text
 PICO OpenXR app
-  -> read left/right pose and buttons
+  -> read left/right pose and buttons (in LOCAL space)
+  -> build a horizon frame from head yaw (drop pitch/roll)
+  -> express controllers relative to the horizon frame
   -> send one CSV line to headset tcp:29761
   -> adb reverse forwards it to PC --vr-port
   -> pc/run.py validates the frame
@@ -306,7 +317,6 @@ apk/generated_apk/pico_head_relative_pose.apk
 Ignored:
 
 ```text
-toolchains/
 apk/target/
 recordings/*.csv
 __pycache__/
