@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, asyncio, os, shutil, subprocess, sys
+import argparse, asyncio, errno, os, shutil, signal, subprocess, sys
 from pathlib import Path
 
 DEVICE_PORT = 29761
@@ -132,12 +132,44 @@ async def start_web(state, port):
     return runner
 
 
+def free_port(port):
+    import re
+    pids = set()
+    try:
+        out = subprocess.run(["ss", "-ltnpH"], capture_output=True, text=True, check=False)
+        for m in re.finditer(r"pid=(\d+)", out.stdout):
+            if f":{port} " in out.stdout:
+                pids.add(m.group(1))
+    except FileNotFoundError:
+        pass
+    try:
+        out = subprocess.run(["lsof", "-ti", f":{port}"], capture_output=True, text=True, check=False)
+        pids.update(p for p in out.stdout.split() if p)
+    except FileNotFoundError:
+        pass
+    for pid in pids:
+        if pid != str(os.getpid()):
+            try:
+                os.kill(int(pid), signal.SIGTERM)
+                print(f"killed pid {pid} occupying port {port}")
+            except (ProcessLookupError, ValueError, PermissionError):
+                pass
+    return bool(pids)
+
+
 async def main(args):
     ros = RosPublisher() if os.environ.get("READ_PICO_ROS") == "1" else None
     state = State(ros.publish if ros else None)
     runner = monitor = None
     try:
-        server = await asyncio.start_server(lambda r, w: receive(r, w, state), "127.0.0.1", args.vr_port)
+        try:
+            server = await asyncio.start_server(lambda r, w: receive(r, w, state), "127.0.0.1", args.vr_port)
+        except OSError as exc:
+            if exc.errno == errno.EADDRINUSE and free_port(args.vr_port):
+                await asyncio.sleep(0.3)
+                server = await asyncio.start_server(lambda r, w: receive(r, w, state), "127.0.0.1", args.vr_port)
+            else:
+                raise
         runner = None if ros else await start_web(state, args.visualize_port)
         adb_setup(args.vr_port)
         print(f"VR data: listening on 127.0.0.1:{args.vr_port}; Ctrl+C to stop")
