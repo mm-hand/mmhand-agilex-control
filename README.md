@@ -5,8 +5,7 @@ Minimal PICO 4 Ultra controller reader.
 The APK reads two controller grip poses and button states in a gravity-aligned
 horizon frame (origin at the head, yaw-only, no pitch/roll) derived from OpenXR
 `LOCAL` space, then sends them to the PC over USB with `adb reverse`. The PC
-side can publish ROS 2 topics, record CSV, and optionally show a browser
-visualizer.
+side can publish ROS 2 topics or show a browser visualizer.
 
 This project does not use ALVR.
 
@@ -30,9 +29,8 @@ sudo apt install -y adb python3 python3-aiohttp
 
 ```bash
 source <(wget -qO- http://fishros.com/install)
-# Choose ROS/ROS2 installation. Jazzy on 24.04, Humble on 22.04.
-source /opt/ros/${ROS_DISTRO:-jazzy}/setup.bash
-sudo apt install -y ros-${ROS_DISTRO:-jazzy}-rclpy ros-${ROS_DISTRO:-jazzy}-geometry-msgs ros-${ROS_DISTRO:-jazzy}-std-msgs
+sudo apt install -y ros-jazzy-rclpy ros-jazzy-geometry-msgs ros-jazzy-std-msgs
+# Humble: replace jazzy with humble.
 ```
 
 ### APK build toolchain (Ubuntu only)
@@ -55,48 +53,33 @@ ANDROID_NDK_HOME $ANDROID_HOME/ndk/25.1.8937393
 
 ## Run
 
+Build the APK, only if modifying the headset app:
+
+```bash
+cd apk && ./build.sh
+```
+
 Install the APK:
 
 ```bash
 adb install -r apk/generated_apk/pico_head_relative_pose.apk
 ```
 
-Start the PC receiver without visualization:
-
-```bash
-python pc/run.py --vr-port 9100
-```
-
-Without ROS 2:
-
-```bash
-python pc/run.py --vr-port 9100 --no-ros
-```
-
-With browser visualization (opens at the printed URL):
-
-```bash
-python pc/run.py --vr-port 9100 --visualize --visualize-port 8765
-```
-
-Record CSV:
-
-```bash
-python pc/run.py --vr-port 9100 --record
-```
-
-Ubuntu ROS shortcut:
+ROS communication:
 
 ```bash
 ./run_ubuntu_ros.sh --vr-port 9100
+# Humble:
 ROS_DISTRO=humble ./run_ubuntu_ros.sh --vr-port 9100
 ```
 
-Build the APK (only if modifying the headset app):
+Visual-only, no ROS:
 
 ```bash
-cd apk && ./build.sh
+python pc/run.py --vr-port 9100 --visualize-port 8765
 ```
+
+Receiver commands run `adb reverse tcp:29761 tcp:<vr-port>` and launch the APK.
 
 ## ROS 2 topics
 
@@ -155,7 +138,7 @@ right: bit0 A, bit1 B, bit2 Trigger, bit3 Grip, bit4 Thumbstick
 read_pico/
 +- run_ubuntu_ros.sh
 +- pc/
-|  +- run.py       # receiver, ADB reverse, ROS, CSV, optional web
+|  +- run.py       # receiver, ADB reverse, ROS or web
 |  `- view.html    # Canvas visualizer
 +- apk/
 |  +- build.sh     # Ubuntu APK build
@@ -165,7 +148,6 @@ read_pico/
 |     +- net.rs     # TCP non-blocking send
 |     +- display.rs # headset status image
 |     `- egl.rs     # EGL/OpenGL setup
-`- recordings/
 ```
 
 ## Debug

@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
-import argparse, asyncio, subprocess, sys
-from datetime import datetime
+import argparse, asyncio, os, shutil, subprocess, sys
 from pathlib import Path
 
 DEVICE_PORT = 29761
 PACKAGE = "com.mmhand.pico_head_relative_pose"
-ROOT = Path(__file__).resolve().parent.parent
-HEADER = "timestamp,left_valid,lx,ly,lz,lqx,lqy,lqz,lqw,right_valid,rx,ry,rz,rqx,rqy,rqz,rqw,left_buttons,right_buttons"
 
 
 def parse_frame(line):
@@ -28,7 +25,7 @@ class RosPublisher:
             from rclpy.qos import qos_profile_sensor_data
             from std_msgs.msg import UInt8MultiArray, UInt32MultiArray
         except ImportError as exc:
-            raise RuntimeError("ROS 2 not available; add --no-ros") from exc
+            raise RuntimeError("ROS 2 not available") from exc
         rclpy.init(args=[])
         self.rclpy = rclpy
         self.Pose, self.PoseArray = Pose, PoseArray
@@ -59,16 +56,10 @@ class RosPublisher:
 
 
 class State:
-    def __init__(self, record, on_frame=None):
+    def __init__(self, on_frame=None):
         self.line = ""
         self.sequence = self.total = self.clients = 0
-        self.file = None
         self.on_frame = on_frame
-        if record:
-            out = ROOT / "recordings"
-            out.mkdir(exist_ok=True)
-            self.file = (out / f"poses_{datetime.now():%Y%m%d_%H%M%S}.csv").open("w", encoding="utf-8")
-            self.file.write(HEADER + "\n")
 
     def accept(self, line):
         frame = parse_frame(line)
@@ -76,13 +67,12 @@ class State:
         self.line = line
         self.sequence += 1
         self.total += 1
-        if self.file: self.file.write(line + "\n")
         if self.on_frame: self.on_frame(frame)
 
 
 def find_adb():
-    adb = Path.home() / "Android" / "Sdk" / "platform-tools" / "adb"
-    if adb.is_file(): return str(adb)
+    for adb in (Path.home() / "Android" / "Sdk" / "platform-tools" / "adb", shutil.which("adb")):
+        if adb and Path(adb).is_file(): return str(adb)
     raise RuntimeError("adb not found")
 
 
@@ -143,12 +133,12 @@ async def start_web(state, port):
 
 
 async def main(args):
-    ros = None if args.no_ros else RosPublisher()
-    state = State(args.record, ros.publish if ros else None)
+    ros = RosPublisher() if os.environ.get("READ_PICO_ROS") == "1" else None
+    state = State(ros.publish if ros else None)
     runner = monitor = None
     try:
         server = await asyncio.start_server(lambda r, w: receive(r, w, state), "127.0.0.1", args.vr_port)
-        runner = await start_web(state, args.visualize_port) if args.visualize else None
+        runner = None if ros else await start_web(state, args.visualize_port)
         adb_setup(args.vr_port)
         print(f"VR data: listening on 127.0.0.1:{args.vr_port}; Ctrl+C to stop")
         monitor = asyncio.create_task(stats(state))
@@ -156,17 +146,13 @@ async def main(args):
     finally:
         if monitor: monitor.cancel()
         if runner: await runner.cleanup()
-        if state.file: state.file.close()
         if ros: ros.close()
 
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Receive PICO controller input over USB")
     p.add_argument("--vr-port", type=int, default=9100)
-    p.add_argument("--visualize", action="store_true")
     p.add_argument("--visualize-port", type=int, default=8765)
-    p.add_argument("--no-ros", action="store_true")
-    p.add_argument("--record", action="store_true")
     return p.parse_args(argv)
 
 
