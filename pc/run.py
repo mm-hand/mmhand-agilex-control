@@ -109,7 +109,7 @@ async def start_web(state, port):
     from aiohttp import web
     async def index(_): return web.FileResponse(Path(__file__).with_name("view.html"))
     async def socket(request):
-        ws = web.WebSocketResponse(heartbeat=10)
+        ws = web.WebSocketResponse(heartbeat=30)
         await ws.prepare(request)
         sent = -1
         try:

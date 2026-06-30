@@ -17,7 +17,7 @@ function connect(){ws=new WebSocket(`ws://${location.host}/ws`);ws.onmessage=e=>
   const v=e.data.split(',').map(Number);if(v.length!==19)return;stamp=v[0];masks=[v[17],v[18]];
   update(hands[0],v.slice(1,9));update(hands[1],v.slice(9,17));
   document.querySelectorAll('.key').forEach(k=>k.classList.toggle('on',!!(masks[k.dataset.hand]&(1<<k.dataset.bit))));
-};ws.onclose=()=>setTimeout(connect,1000)}
+};ws.onclose=()=>setTimeout(connect,150)}
 connect();
 function update(h,v){h.valid=!!v[0];if(h.valid){h.pose={p:v.slice(1,4),q:v.slice(4,8)};h.trail.push(h.pose.p);if(h.trail.length>100)h.trail.shift()}}
 function rotate(q,v){const [x,y,z,w]=q,[a,b,c]=v,tx=2*(y*c-z*b),ty=2*(z*a-x*c),tz=2*(x*b-y*a);return[a+w*tx+y*tz-z*ty,b+w*ty+z*tx-x*tz,c+w*tz+x*ty-y*tx]}
