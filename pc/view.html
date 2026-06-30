@@ -21,11 +21,85 @@ function connect(){ws=new WebSocket(`ws://${location.host}/ws`);ws.onmessage=e=>
 connect();
 function update(h,v){h.valid=!!v[0];if(h.valid){h.pose={p:v.slice(1,4),q:v.slice(4,8)};h.trail.push(h.pose.p);if(h.trail.length>100)h.trail.shift()}}
 function rotate(q,v){const [x,y,z,w]=q,[a,b,c]=v,tx=2*(y*c-z*b),ty=2*(z*a-x*c),tz=2*(x*b-y*a);return[a+w*tx+y*tz-z*ty,b+w*ty+z*tx-x*tz,c+w*tz+x*ty-y*tx]}
-function project([x,y,z]){const s=Math.min(innerWidth,innerHeight)*.62;return[innerWidth/2+s*(x-.45*z),innerHeight*.43-s*(y+.18*z)]}
-function line(a,b,color,width=1){a=project(a);b=project(b);ctx.strokeStyle=color;ctx.lineWidth=width;ctx.beginPath();ctx.moveTo(...a);ctx.lineTo(...b);ctx.stroke()}
-function arrow(a,b,color,width=1){a=project(a);b=project(b);ctx.strokeStyle=color;ctx.lineWidth=width;ctx.beginPath();ctx.moveTo(...a);ctx.lineTo(...b);ctx.stroke();const dx=b[0]-a[0],dy=b[1]-a[1],L=Math.hypot(dx,dy)||1,nx=dx/L,ny=dy/L,hx=-ny,hy=nx,s=6;ctx.beginPath();ctx.moveTo(b[0],b[1]);ctx.lineTo(b[0]-nx*s+hx*s*.55,b[1]-ny*s+hy*s*.55);ctx.moveTo(b[0],b[1]);ctx.lineTo(b[0]-nx*s-hx*s*.55,b[1]-ny*s-hy*s*.55);ctx.stroke()}
-function grid(){for(let i=-5;i<=5;i++){line([i/5,-.5,-1],[i/5,-.5,.5],'#202630');line([-1,-.5,i/10],[1,-.5,i/10],'#202630')}arrow([0,0,0],[.15,0,0],'#d44',2);arrow([0,0,0],[0,.15,0],'#4d4',2);arrow([0,0,0],[0,0,.15],'#48f',2)}
-function drawHand(h){if(!h.pose)return;const p=h.pose.p,q=h.pose.q,c=h.valid?h.color:'#777';if(h.trail.length>1){ctx.strokeStyle=c+'88';ctx.beginPath();h.trail.map(project).forEach((v,i)=>i?ctx.lineTo(...v):ctx.moveTo(...v));ctx.stroke()}const axes=[[[.12,0,0],'#f44'],[[0,.12,0],'#4f4'],[[0,0,.12],'#48f']];for(const[a,col]of axes){const d=rotate(q,a);arrow(p,[p[0]+d[0],p[1]+d[1],p[2]+d[2]],h.valid?col:'#777',3)}const s=project(p);ctx.fillStyle=c;ctx.beginPath();ctx.arc(...s,6,0,7);ctx.fill();ctx.fillText(h.name,s[0]+9,s[1]-8)}
-function frame(now){frames++;const d=now-last;if(d>500){fps=Math.round(frames*1000/d);frames=0;last=now}const ratio=devicePixelRatio||1,w=innerWidth*ratio,h=innerHeight*ratio;if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h}ctx.setTransform(ratio,0,0,ratio,0,0);ctx.clearRect(0,0,innerWidth,innerHeight);grid();hands.forEach(drawHand);status.textContent=`horizon frame (+X right, +Y up, -Z forward)\n${hands.map(h=>h.name+': '+(h.valid?'tracked':'lost')).join('  ')}\nrender: ${fps} fps  timestamp: ${stamp.toFixed(3)}`;requestAnimationFrame(frame)}
+
+/* ---- 3D perspective camera: +X right, +Y up, +Z toward viewer (out of screen) ---- */
+const CAM={pos:[-0.9,0.65,1.85], target:[0,0,-0.35], fov:42};
+const sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+const dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const norm=v=>{const l=Math.hypot(...v)||1;return [v[0]/l,v[1]/l,v[2]/l];};
+let FOCAL=1000;
+function buildCam(){
+  const f=norm(sub(CAM.target,CAM.pos));
+  const r=norm(cross(f,[0,1,0]));  /* right = cross(forward, up_world) -> +X to screen right */
+  const u=norm(cross(r,f));        /* true up (right-handed) */
+  CAM.b={f,fwd:f,right:r,up:u};
+}
+buildCam();
+function project([x,y,z]){
+  const rel=[x-CAM.pos[0],y-CAM.pos[1],z-CAM.pos[2]];
+  const xv=dot(rel,CAM.b.right),yv=dot(rel,CAM.b.up),zv=dot(rel,CAM.b.fwd);
+  if(zv<0.05)return null;
+  const s=FOCAL/zv;
+  return [innerWidth/2+s*xv, innerHeight/2-s*yv, zv];
+}
+function seg(a,b,color,width){
+  const pa=project(a),pb=project(b);
+  if(!pa||!pb)return;
+  ctx.strokeStyle=color;ctx.lineWidth=width||1;ctx.beginPath();ctx.moveTo(pa[0],pa[1]);ctx.lineTo(pb[0],pb[1]);ctx.stroke();
+}
+function arrow(a,b,color,width){
+  const pa=project(a),pb=project(b);
+  if(!pa||!pb)return;
+  ctx.strokeStyle=color;ctx.lineWidth=width||1;ctx.beginPath();ctx.moveTo(pa[0],pa[1]);ctx.lineTo(pb[0],pb[1]);ctx.stroke();
+  const dx=pb[0]-pa[0],dy=pb[1]-pa[1],L=Math.hypot(dx,dy)||1,nx=dx/L,ny=dy/L,hx=-ny,hy=nx,s=6;
+  ctx.beginPath();ctx.moveTo(pb[0],pb[1]);ctx.lineTo(pb[0]-nx*s+hx*s*.55,pb[1]-ny*s+hy*s*.55);ctx.moveTo(pb[0],pb[1]);ctx.lineTo(pb[0]-nx*s-hx*s*.55,pb[1]-ny*s-hy*s*.55);ctx.stroke();
+}
+function label(p,text,color){
+  const s=project(p);if(!s)return;ctx.fillStyle=color;ctx.fillText(text,s[0]+6,s[1]-6);
+}
+function grid(){
+  /* ground plane y=-0.5, grids in X and Z (horizon ground plane = XZ) */
+  for(let i=-4;i<=4;i++){
+    const x=i*0.25;
+    seg([x,-0.5,-1],[x,-0.5,1],'#1c2230');         /* Z-direction grid line */
+    const z=i*0.25;
+    seg([-1,-0.5,z],[1,-0.5,z],'#1c2230');         /* X-direction grid line */
+  }
+  /* origin axes: X red, Y green, Z blue (Z recedes into screen) */
+  arrow([0,0,0],[0.2,0,0],'#d44',2); label([0.2,0,0],'X','#d44');
+  arrow([0,0,0],[0,0.2,0],'#4d4',2); label([0,0.2,0],'Y','#4d4');
+  arrow([0,0,0],[0,0,0.2],'#48f',2); label([0,0,0.2],'Z','#48f');
+}
+function drawHand(h){
+  if(!h.pose)return;
+  const p=h.pose.p,q=h.pose.q,c=h.valid?h.color:'#777';
+  if(h.trail.length>1){
+    ctx.strokeStyle=c+'88';ctx.beginPath();
+    let started=false;
+    for(const t of h.trail){const s=project(t);if(!s){started=false;continue;}if(!started){ctx.moveTo(s[0],s[1]);started=true}else ctx.lineTo(s[0],s[1]);}
+    ctx.stroke();
+  }
+  const axes=[[[.12,0,0],'#f44'],[[0,.12,0],'#4f4'],[[0,0,.12],'#48f']];
+  for(const [a,col] of axes){
+    const d=rotate(q,a);
+    arrow(p,[p[0]+d[0],p[1]+d[1],p[2]+d[2]],h.valid?col:'#777',3);
+  }
+  const s=project(p);if(!s)return;
+  ctx.fillStyle=c;ctx.beginPath();ctx.arc(s[0],s[1],6,0,7);ctx.fill();
+  ctx.fillText(h.name,s[0]+9,s[1]-8);
+}
+function frame(now){
+  frames++;const d=now-last;if(d>500){fps=Math.round(frames*1000/d);frames=0;last=now}
+  const ratio=devicePixelRatio||1,w=innerWidth*ratio,h=innerHeight*ratio;
+  if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h}
+  ctx.setTransform(ratio,0,0,ratio,0,0);
+  FOCAL=(innerHeight/2)/Math.tan(CAM.fov*Math.PI/360);
+  ctx.clearRect(0,0,innerWidth,innerHeight);
+  grid();
+  hands.forEach(drawHand);
+  status.textContent=`perspective: +X right  +Y up  +Z toward viewer (out of screen)\ncam @ [${CAM.pos.join(', ')}]\n${hands.map(h=>h.name+': '+(h.valid?'tracked':'lost')).join('  ')}\nrender: ${fps} fps  timestamp: ${stamp.toFixed(3)}`;
+  requestAnimationFrame(frame);
+}
 requestAnimationFrame(frame);
 </script>
