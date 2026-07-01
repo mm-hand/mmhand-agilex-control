@@ -66,7 +66,7 @@ class FrameTransformConfig:
 
     # === ^C T_D: controller_to_flange (fixed calibration, shared by both arms) ===
     # rpy = (roll, pitch, yaw). R = R_z(yaw) @ R_y(pitch) @ R_x(roll) [Z-Y-X intrinsic].
-    translation_controller_to_flange_m: tuple[float, float, float] = (0.0, 0.03, 0.065)
+    translation_controller_to_flange_m: tuple[float, float, float] = (0.0, -0.03, 0.065)
     rotation_controller_to_flange_rpy_deg: tuple[float, float, float] = (0.0, -180.0, 90.0)
 
     # === Human -> robot scale ===
@@ -82,7 +82,7 @@ class IkConfig:
     xacro_path: str = "control_sim/nero/urdf/nero_with_revo2_flange_description.xacro"
     max_iter: int = 500
     tol: float = 1e-4
-    slimit: int = 1              # single search from q0, no random restarts -> continuity
+    slimit: int = 100            # max searches (random restarts) for ik_LM
     method: str = "sugihara"     # LM damping: W_n = E_k*I + diag(k^2*I)
     k: float = 0.01              # sugihara gain
 
