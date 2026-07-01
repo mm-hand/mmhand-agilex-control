@@ -80,12 +80,16 @@ def _arm_frames(
     shoulder_from_arm_base: np.ndarray,
     horizon_from_shoulder: np.ndarray,
     config: FrameTransformConfig,
+    scale: float,
 ) -> ArmFrames | None:
     if pose is None:
         return None
 
-    # --- Formula: ^B T_U(t) = ^B T_S · ^S T_P · ^P T_C(t) · ^C T_D ---
-    # U = revo2_flange (xacro end link, IK target directly). No ^U T_D needed.
+    # --- Formula (with shoulder-origin scaling):
+    #   ^B T_D(t) = ^B T_S · scale_S( ^S T_P · ^P T_C(t) ) · ^C T_D
+    # where scale_S scales the TRANSLATION of its operand expressed in the
+    # shoulder frame (rotation unchanged). Shoulder position is the scaling
+    # origin, so arm bases and shoulder offsets are not affected. ---
 
     # ^B T_S = inv(^S T_B)  (arm_base_from_shoulder, constant)
     arm_base_from_shoulder = _invert_transform(shoulder_from_arm_base)
@@ -101,18 +105,26 @@ def _arm_frames(
     # ^C T_D  (controller_from_flange, constant)
     controller_from_flange = _controller_from_flange(config)
 
-    # --- Chain: ^B T_D(t) = ^B T_S · ^S T_P · ^P T_C(t) · ^C T_D ---
+    # --- Shoulder-frame scaling of the controller pose ---
+    # ^S T_C(t) = ^S T_P · ^P T_C(t); scale its translation by s.
+    shoulder_from_controller = shoulder_from_horizon @ horizon_from_controller
+    shoulder_from_controller_scaled = shoulder_from_controller.copy()
+    shoulder_from_controller_scaled[:3, 3] *= scale
+
+    # --- Chain: ^B T_D(t) = ^B T_S · ^S T_C'(t) · ^C T_D ---
     arm_base_from_flange = (
-        arm_base_from_shoulder @ shoulder_from_horizon @ horizon_from_controller @ controller_from_flange
+        arm_base_from_shoulder @ shoulder_from_controller_scaled @ controller_from_flange
     )
 
-    # --- For visualization: horizon_from_flange and horizon_from_arm_base ---
+    # --- For visualization: horizon_from_flange (using scaled controller pose) ---
+    # ^P T_C'(t) = ^P T_S · ^S T_C'(t); then ^P T_D = ^P T_C' · ^C T_D.
+    horizon_from_controller_scaled = horizon_from_shoulder @ shoulder_from_controller_scaled
     horizon_from_arm_base = horizon_from_shoulder @ shoulder_from_arm_base
-    horizon_from_flange = horizon_from_controller @ controller_from_flange
+    horizon_from_flange = horizon_from_controller_scaled @ controller_from_flange
 
     return ArmFrames(
         transform_pico_horizon_from_arm_base=horizon_from_arm_base,
-        transform_pico_horizon_from_pico_controller=horizon_from_controller,
+        transform_pico_horizon_from_pico_controller=horizon_from_controller_scaled,
         transform_pico_horizon_from_flange=horizon_from_flange,
         transform_arm_base_from_flange=arm_base_from_flange,
     )
@@ -156,7 +168,9 @@ def build_coordinate_frames(
     left_hfs = _horizon_from_shoulder(config.translation_pico_horizon_from_left_shoulder_m)
     right_hfs = _horizon_from_shoulder(config.translation_pico_horizon_from_right_shoulder_m)
 
+    scale = config.robot_size_m / config.human_size_m
+
     return CoordinateFrames(
-        left=_arm_frames(left_pose, left_sfb, left_hfs, config),
-        right=_arm_frames(right_pose, right_sfb, right_hfs, config),
+        left=_arm_frames(left_pose, left_sfb, left_hfs, config, scale),
+        right=_arm_frames(right_pose, right_sfb, right_hfs, config, scale),
     )

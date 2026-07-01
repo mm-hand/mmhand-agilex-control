@@ -69,6 +69,13 @@ class FrameTransformConfig:
     translation_pico_controller_from_flange_m: tuple[float, float, float] = (0.0, 0.03, 0.065)
     rotation_pico_controller_from_flange_rpy_deg: tuple[float, float, float] = (0.0, -180.0, 90.0)
 
+    # === Human -> robot scale ===
+    # Translations are scaled by s = robot_size_m / human_size_m in the SHOULDER
+    # frame (shoulder is the scaling origin; shoulder position is preserved).
+    # Rotations are NOT scaled. With human 1 : robot 1.45, motions amplify 45%.
+    human_size_m: float = 1.0
+    robot_size_m: float = 1.45
+
 
 @dataclass(frozen=True)
 class IkConfig:
