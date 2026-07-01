@@ -59,33 +59,33 @@ def rotation_matrix_from_rpy_deg(rpy_deg: tuple[float, float, float]) -> np.ndar
 
 
 def transform_from_rotation_and_translation(
-    rotation_target_from_source: np.ndarray,
-    translation_target_from_source_m: tuple[float, float, float] | np.ndarray,
+    rotation_target_to_source: np.ndarray,
+    translation_target_to_source_m: tuple[float, float, float] | np.ndarray,
 ) -> np.ndarray:
-    transform_target_from_source = np.eye(4, dtype=float)
-    transform_target_from_source[:3, :3] = np.asarray(rotation_target_from_source, dtype=float).reshape(3, 3)
-    transform_target_from_source[:3, 3] = np.asarray(translation_target_from_source_m, dtype=float).reshape(3)
-    return transform_target_from_source
+    transform_target_to_source = np.eye(4, dtype=float)
+    transform_target_to_source[:3, :3] = np.asarray(rotation_target_to_source, dtype=float).reshape(3, 3)
+    transform_target_to_source[:3, 3] = np.asarray(translation_target_to_source_m, dtype=float).reshape(3)
+    return transform_target_to_source
 
 
 def transform_from_translation(
-    translation_target_from_source_m: tuple[float, float, float] | np.ndarray,
+    translation_target_to_source_m: tuple[float, float, float] | np.ndarray,
 ) -> np.ndarray:
-    return transform_from_rotation_and_translation(np.eye(3, dtype=float), translation_target_from_source_m)
+    return transform_from_rotation_and_translation(np.eye(3, dtype=float), translation_target_to_source_m)
 
 
-def invert_transform(transform_target_from_source: np.ndarray) -> np.ndarray:
-    transform_target_from_source = np.asarray(transform_target_from_source, dtype=float).reshape(4, 4)
-    rotation_target_from_source = transform_target_from_source[:3, :3]
-    translation_target_from_source = transform_target_from_source[:3, 3]
-    transform_source_from_target = np.eye(4, dtype=float)
-    transform_source_from_target[:3, :3] = rotation_target_from_source.T
-    transform_source_from_target[:3, 3] = -(rotation_target_from_source.T @ translation_target_from_source)
-    return transform_source_from_target
+def invert_transform(transform_target_to_source: np.ndarray) -> np.ndarray:
+    transform_target_to_source = np.asarray(transform_target_to_source, dtype=float).reshape(4, 4)
+    rotation_target_to_source = transform_target_to_source[:3, :3]
+    translation_target_to_source = transform_target_to_source[:3, 3]
+    transform_source_to_target = np.eye(4, dtype=float)
+    transform_source_to_target[:3, :3] = rotation_target_to_source.T
+    transform_source_to_target[:3, 3] = -(rotation_target_to_source.T @ translation_target_to_source)
+    return transform_source_to_target
 
 
-def assert_rotation_matrix(rotation_target_from_source: np.ndarray, atol: float = 1e-6) -> None:
-    rotation = np.asarray(rotation_target_from_source, dtype=float).reshape(3, 3)
+def assert_rotation_matrix(rotation_target_to_source: np.ndarray, atol: float = 1e-6) -> None:
+    rotation = np.asarray(rotation_target_to_source, dtype=float).reshape(3, 3)
     if not np.allclose(rotation.T @ rotation, np.eye(3), atol=atol):
         raise ValueError("rotation matrix is not orthonormal")
     determinant = float(np.linalg.det(rotation))

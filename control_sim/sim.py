@@ -51,29 +51,29 @@ def run_sim(ros_cfg, frame_cfg, ik_cfg, sim_cfg, ctrl_cfg):
             f = build_coordinate_frames(sub.get_left(), sub.get_right(), frame_cfg)
             lq = rq = None
             if f.left is not None:
-                q = L.solve(f.left.transform_flange_to_arm_base)
+                q = L.solve(f.left.transform_arm_base_to_flange)
                 if q is not None:
                     L.robot.q = q; lq = q
                 else:
                     print("[IK] L hold", flush=True)
-                lc.T = _s2se3(f.left.transform_controller_to_horizon).A
-                lf.T = _s2se3(f.left.transform_flange_to_horizon).A
+                lc.T = _s2se3(f.left.transform_horizon_to_controller).A
+                lf.T = _s2se3(f.left.transform_horizon_to_flange).A
             if f.right is not None:
-                q = R.solve(f.right.transform_flange_to_arm_base)
+                q = R.solve(f.right.transform_arm_base_to_flange)
                 if q is not None:
                     R.robot.q = q; rq = q
                 else:
                     print("[IK] R hold", flush=True)
-                rc.T = _s2se3(f.right.transform_controller_to_horizon).A
-                rf.T = _s2se3(f.right.transform_flange_to_horizon).A
+                rc.T = _s2se3(f.right.transform_horizon_to_controller).A
+                rf.T = _s2se3(f.right.transform_horizon_to_flange).A
             if ctrl_cfg.enabled:
                 NoopRobotController().send(lq, rq)
             n += 1
             if n % 50 == 0 and f.left is not None:
-                ch = f.left.transform_controller_to_horizon[:3, 3]
-                fh = f.left.transform_flange_to_horizon[:3, 3]
+                ch = f.left.transform_horizon_to_controller[:3, 3]
+                fh = f.left.transform_horizon_to_flange[:3, 3]
                 print(f"[L] h ctrl={np.round(ch,4)} flange={np.round(fh,4)}", flush=True)
-                print(f"[L] s ctrl={np.round((_S@f.left.transform_controller_to_horizon)[:3,3],4)} flange={np.round((_S@f.left.transform_flange_to_horizon)[:3,3],4)}", flush=True)
+                print(f"[L] s ctrl={np.round((_S@f.left.transform_horizon_to_controller)[:3,3],4)} flange={np.round((_S@f.left.transform_horizon_to_flange)[:3,3],4)}", flush=True)
             env.step(dt)
             time.sleep(dt)
     except KeyboardInterrupt:

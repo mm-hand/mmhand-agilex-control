@@ -40,9 +40,9 @@ class NeroIK:
         self.robot = rtb.Robot.URDF(_resolve_xacro(ik_config.xacro_path))
         self.q_prev = self.robot.q.copy()
 
-    def solve(self, transform_flange_to_arm_base: np.ndarray) -> np.ndarray | None:
-        R = transform_flange_to_arm_base[:3, :3]
-        t = transform_flange_to_arm_base[:3, 3]
+    def solve(self, transform_arm_base_to_flange: np.ndarray) -> np.ndarray | None:
+        R = transform_arm_base_to_flange[:3, :3]
+        t = transform_arm_base_to_flange[:3, 3]
         # ik_LM returns (q, iterations, searches, reason, residual).
         # iterations > 0 means converged. On failure return None so the caller
         # holds the previous solvable q and reports IK unsolvable.

@@ -17,8 +17,8 @@ from dataclasses import dataclass
 # All angles in this file are in DEGREES (converted to radians at use site).
 # All translations are in METERS.
 #
-# Transform naming: ^A T_B = B_to_A = "B expressed in frame A".
-# Chaining reads right-to-left: A_from_C = C_to_B @ B_to_A  (D->C->B->A).
+# Transform naming: ^A T_B = A_to_B = "B expressed in frame A".
+# Chaining reads left-to-right: A_to_C = A_to_B @ B_to_C  (A->B->C).
 #
 # Formula (left arm shown; right arm analogous):
 #   ^B T_U(t) = ^B T_S · ^S T_P · ^P T_C(t) · ^C T_D
@@ -28,10 +28,10 @@ from dataclasses import dataclass
 #   C = controller     U = revo2_flange (xacro end link, IK target)
 #
 # Terms:
-#   ^B T_S       = arm_base_to_shoulder           (constant: rotation + translation)
+#   ^B T_S       = shoulder_to_arm_base           (constant: rotation + translation)
 #   ^S T_P       = horizon_to_shoulder            (constant: translation only, same yaw as head)
 #   ^P T_C(t)    = controller_to_horizon          (TIME-VARYING: from PICO ROS topic)
-#   ^C T_D       = flange_to_controller           (constant: controller-to-flange calibration)
+#   ^C T_D       = controller_to_flange           (constant: controller-to-flange calibration)
 #
 # Euler angle order: R = R_z(yaw) @ R_y(pitch) @ R_x(roll) [Z-Y-X intrinsic].
 # rpy tuples in this file are (roll, pitch, yaw) in that order.
@@ -48,26 +48,26 @@ class RosConfig:
 
 @dataclass(frozen=True)
 class FrameTransformConfig:
-    # === ^S T_B: shoulder_from_arm_base (defines ^B T_S = inv(^S T_B)) ===
+    # === ^S T_B: shoulder_to_arm_base (defines ^B T_S = inv(^S T_B)) ===
     # rpy = (roll, pitch, yaw). R = R_z(yaw) @ R_y(pitch) @ R_x(roll) [Z-Y-X intrinsic].
     # Left arm: arm_base Z axis in horizon = (-1, +1, -1)/sqrt(3), pointing upper-left.
-    translation_left_arm_base_to_left_shoulder_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
-    rotation_left_arm_base_to_left_shoulder_rpy_deg: tuple[float, float, float] = (126.2063, -12.2002, -143.7937)
+    translation_left_shoulder_to_left_arm_base_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    rotation_left_shoulder_to_left_arm_base_rpy_deg: tuple[float, float, float] = (126.2063, -12.2002, -143.7937)
 
     # Right arm: mirror of left about horizon YZ plane. Z axis = (+1, +1, -1)/sqrt(3).
-    translation_right_arm_base_to_right_shoulder_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
-    rotation_right_arm_base_to_right_shoulder_rpy_deg: tuple[float, float, float] = (-159.8959, 52.0616, -110.1041)
+    translation_right_shoulder_to_right_arm_base_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    rotation_right_shoulder_to_right_arm_base_rpy_deg: tuple[float, float, float] = (-159.8959, 52.0616, -110.1041)
 
-    # === ^P T_S: horizon_from_shoulder (defines ^S T_P = inv(^P T_S)) ===
+    # === ^P T_S: horizon_to_shoulder (defines ^S T_P = inv(^P T_S)) ===
     # Shoulder position in PICO horizon frame. Headset hangs on neck,
     # left shoulder is ~16cm to the left, right shoulder ~16cm to the right.
-    translation_left_shoulder_to_horizon_m: tuple[float, float, float] = (-0.16, 0.0, 0.0)
-    translation_right_shoulder_to_horizon_m: tuple[float, float, float] = (0.16, 0.0, 0.0)
+    translation_horizon_to_left_shoulder_m: tuple[float, float, float] = (-0.16, 0.0, 0.0)
+    translation_horizon_to_right_shoulder_m: tuple[float, float, float] = (0.16, 0.0, 0.0)
 
-    # === ^C T_D: controller_from_flange (fixed calibration, shared by both arms) ===
+    # === ^C T_D: controller_to_flange (fixed calibration, shared by both arms) ===
     # rpy = (roll, pitch, yaw). R = R_z(yaw) @ R_y(pitch) @ R_x(roll) [Z-Y-X intrinsic].
-    translation_flange_to_controller_m: tuple[float, float, float] = (0.0, 0.03, 0.065)
-    rotation_flange_to_controller_rpy_deg: tuple[float, float, float] = (0.0, -180.0, 90.0)
+    translation_controller_to_flange_m: tuple[float, float, float] = (0.0, 0.03, 0.065)
+    rotation_controller_to_flange_rpy_deg: tuple[float, float, float] = (0.0, -180.0, 90.0)
 
     # === Human -> robot scale ===
     # Translations are scaled by s = robot_size_m / human_size_m in the SHOULDER
