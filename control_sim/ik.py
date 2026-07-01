@@ -51,6 +51,9 @@ class NeroIK:
             q0=self.q_prev,
             tol=self.config.tol,
             ilimit=self.config.max_iter,
+            slimit=self.config.slimit,
+            k=self.config.k,
+            method=self.config.method,
             end="revo2_flange",
         )
         if int(sol[1]) <= 0:

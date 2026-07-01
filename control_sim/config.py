@@ -82,6 +82,9 @@ class IkConfig:
     xacro_path: str = "control_sim/nero/urdf/nero_with_revo2_flange_description.xacro"
     max_iter: int = 500
     tol: float = 1e-4
+    slimit: int = 1              # single search from q0, no random restarts -> continuity
+    method: str = "sugihara"     # LM damping: W_n = E_k*I + diag(k^2*I)
+    k: float = 0.01              # sugihara gain
 
 
 @dataclass(frozen=True)
