@@ -30,10 +30,10 @@ class ControllerPose:
 
 
 class ArmFrames(NamedTuple):
-    transform_pico_horizon_from_arm_base: np.ndarray
-    transform_pico_horizon_from_pico_controller: np.ndarray
-    transform_pico_horizon_from_flange: np.ndarray
-    transform_arm_base_from_flange: np.ndarray
+    transform_arm_base_to_horizon: np.ndarray
+    transform_controller_to_horizon: np.ndarray
+    transform_flange_to_horizon: np.ndarray
+    transform_flange_to_arm_base: np.ndarray
 
 
 class CoordinateFrames(NamedTuple):
@@ -49,36 +49,36 @@ def _invert_transform(t: np.ndarray) -> np.ndarray:
     return inv
 
 
-def _shoulder_from_arm_base(
-    translation_shoulder_from_arm_base_m: tuple[float, float, float],
-    rotation_shoulder_from_arm_base_rpy_deg: tuple[float, float, float],
+def _arm_base_to_shoulder(
+    translation_arm_base_to_shoulder_m: tuple[float, float, float],
+    rotation_arm_base_to_shoulder_rpy_deg: tuple[float, float, float],
 ) -> np.ndarray:
-    """^S T_B: shoulder_from_arm_base (rotation + translation)."""
-    rotation = rotation_matrix_from_rpy_deg(rotation_shoulder_from_arm_base_rpy_deg)
+    """^S T_B: arm_base_to_shoulder (rotation + translation)."""
+    rotation = rotation_matrix_from_rpy_deg(rotation_arm_base_to_shoulder_rpy_deg)
     return transform_from_rotation_and_translation(
-        rotation, translation_shoulder_from_arm_base_m
+        rotation, translation_arm_base_to_shoulder_m
     )
 
 
-def _horizon_from_shoulder(
-    translation_horizon_from_shoulder_m: tuple[float, float, float],
+def _shoulder_to_horizon(
+    translation_shoulder_to_horizon_m: tuple[float, float, float],
 ) -> np.ndarray:
-    """^P T_S: horizon_from_shoulder (translation only, same yaw as head)."""
-    return transform_from_translation(translation_horizon_from_shoulder_m)
+    """^P T_S: shoulder_to_horizon (translation only, same yaw as head)."""
+    return transform_from_translation(translation_shoulder_to_horizon_m)
 
 
-def _controller_from_flange(config: FrameTransformConfig) -> np.ndarray:
-    """^C T_D: controller_from_flange (fixed calibration)."""
-    rotation = rotation_matrix_from_rpy_deg(config.rotation_pico_controller_from_flange_rpy_deg)
+def _flange_to_controller(config: FrameTransformConfig) -> np.ndarray:
+    """^C T_D: flange_to_controller (fixed calibration)."""
+    rotation = rotation_matrix_from_rpy_deg(config.rotation_flange_to_controller_rpy_deg)
     return transform_from_rotation_and_translation(
-        rotation, config.translation_pico_controller_from_flange_m
+        rotation, config.translation_flange_to_controller_m
     )
 
 
 def _arm_frames(
     pose: ControllerPose | None,
-    shoulder_from_arm_base: np.ndarray,
-    horizon_from_shoulder: np.ndarray,
+    arm_base_to_shoulder: np.ndarray,
+    shoulder_to_horizon: np.ndarray,
     config: FrameTransformConfig,
     scale: float,
 ) -> ArmFrames | None:
@@ -91,42 +91,42 @@ def _arm_frames(
     # shoulder frame (rotation unchanged). Shoulder position is the scaling
     # origin, so arm bases and shoulder offsets are not affected. ---
 
-    # ^B T_S = inv(^S T_B)  (arm_base_from_shoulder, constant)
-    arm_base_from_shoulder = _invert_transform(shoulder_from_arm_base)
+    # ^B T_S = inv(^S T_B)  (shoulder_to_arm_base, constant)
+    shoulder_to_arm_base = _invert_transform(arm_base_to_shoulder)
 
-    # ^S T_P = inv(^P T_S)  (shoulder_from_horizon, constant)
-    shoulder_from_horizon = _invert_transform(horizon_from_shoulder)
+    # ^S T_P = inv(^P T_S)  (horizon_to_shoulder, constant)
+    horizon_to_shoulder = _invert_transform(shoulder_to_horizon)
 
-    # ^P T_C(t)  (horizon_from_controller, TIME-VARYING from PICO)
-    horizon_from_controller = transform_from_rotation_and_translation(
+    # ^P T_C(t)  (controller_to_horizon, TIME-VARYING from PICO)
+    controller_to_horizon = transform_from_rotation_and_translation(
         rotation_matrix_from_quat_xyzw(pose.quat_xyzw), pose.xyz_m
     )
 
-    # ^C T_D  (controller_from_flange, constant)
-    controller_from_flange = _controller_from_flange(config)
+    # ^C T_D  (flange_to_controller, constant)
+    flange_to_controller = _flange_to_controller(config)
 
     # --- Shoulder-frame scaling of the controller pose ---
     # ^S T_C(t) = ^S T_P · ^P T_C(t); scale its translation by s.
-    shoulder_from_controller = shoulder_from_horizon @ horizon_from_controller
-    shoulder_from_controller_scaled = shoulder_from_controller.copy()
-    shoulder_from_controller_scaled[:3, 3] *= scale
+    controller_to_shoulder = horizon_to_shoulder @ controller_to_horizon
+    controller_to_shoulder_scaled = controller_to_shoulder.copy()
+    controller_to_shoulder_scaled[:3, 3] *= scale
 
     # --- Chain: ^B T_D(t) = ^B T_S · ^S T_C'(t) · ^C T_D ---
-    arm_base_from_flange = (
-        arm_base_from_shoulder @ shoulder_from_controller_scaled @ controller_from_flange
+    flange_to_arm_base = (
+        shoulder_to_arm_base @ controller_to_shoulder_scaled @ flange_to_controller
     )
 
     # --- For visualization: horizon_from_flange (using scaled controller pose) ---
     # ^P T_C'(t) = ^P T_S · ^S T_C'(t); then ^P T_D = ^P T_C' · ^C T_D.
-    horizon_from_controller_scaled = horizon_from_shoulder @ shoulder_from_controller_scaled
-    horizon_from_arm_base = horizon_from_shoulder @ shoulder_from_arm_base
-    horizon_from_flange = horizon_from_controller_scaled @ controller_from_flange
+    controller_to_horizon_scaled = shoulder_to_horizon @ controller_to_shoulder_scaled
+    arm_base_to_horizon = shoulder_to_horizon @ arm_base_to_shoulder
+    flange_to_horizon = controller_to_horizon_scaled @ flange_to_controller
 
     return ArmFrames(
-        transform_pico_horizon_from_arm_base=horizon_from_arm_base,
-        transform_pico_horizon_from_pico_controller=horizon_from_controller_scaled,
-        transform_pico_horizon_from_flange=horizon_from_flange,
-        transform_arm_base_from_flange=arm_base_from_flange,
+        transform_arm_base_to_horizon=arm_base_to_horizon,
+        transform_controller_to_horizon=controller_to_horizon_scaled,
+        transform_flange_to_horizon=flange_to_horizon,
+        transform_flange_to_arm_base=flange_to_arm_base,
     )
 
 
@@ -136,18 +136,18 @@ class ArmBases(NamedTuple):
 
 
 def arm_base_in_horizon(config: FrameTransformConfig) -> ArmBases:
-    """Compute horizon_from_arm_base for both arms (for swift base placement)."""
-    left = _horizon_from_shoulder(
-        config.translation_pico_horizon_from_left_shoulder_m
-    ) @ _shoulder_from_arm_base(
-        config.translation_left_shoulder_from_left_arm_base_m,
-        config.rotation_left_shoulder_from_left_arm_base_rpy_deg,
+    """Compute arm_base_to_horizon for both arms (for swift base placement)."""
+    left = _shoulder_to_horizon(
+        config.translation_left_shoulder_to_horizon_m
+    ) @ _arm_base_to_shoulder(
+        config.translation_left_arm_base_to_left_shoulder_m,
+        config.rotation_left_arm_base_to_left_shoulder_rpy_deg,
     )
-    right = _horizon_from_shoulder(
-        config.translation_pico_horizon_from_right_shoulder_m
-    ) @ _shoulder_from_arm_base(
-        config.translation_right_shoulder_from_right_arm_base_m,
-        config.rotation_right_shoulder_from_right_arm_base_rpy_deg,
+    right = _shoulder_to_horizon(
+        config.translation_right_shoulder_to_horizon_m
+    ) @ _arm_base_to_shoulder(
+        config.translation_right_arm_base_to_right_shoulder_m,
+        config.rotation_right_arm_base_to_right_shoulder_rpy_deg,
     )
     return ArmBases(left=left, right=right)
 
@@ -157,20 +157,20 @@ def build_coordinate_frames(
     right_pose: ControllerPose | None,
     config: FrameTransformConfig,
 ) -> CoordinateFrames:
-    left_sfb = _shoulder_from_arm_base(
-        config.translation_left_shoulder_from_left_arm_base_m,
-        config.rotation_left_shoulder_from_left_arm_base_rpy_deg,
+    left_arm_base_to_shoulder = _arm_base_to_shoulder(
+        config.translation_left_arm_base_to_left_shoulder_m,
+        config.rotation_left_arm_base_to_left_shoulder_rpy_deg,
     )
-    right_sfb = _shoulder_from_arm_base(
-        config.translation_right_shoulder_from_right_arm_base_m,
-        config.rotation_right_shoulder_from_right_arm_base_rpy_deg,
+    right_arm_base_to_shoulder = _arm_base_to_shoulder(
+        config.translation_right_arm_base_to_right_shoulder_m,
+        config.rotation_right_arm_base_to_right_shoulder_rpy_deg,
     )
-    left_hfs = _horizon_from_shoulder(config.translation_pico_horizon_from_left_shoulder_m)
-    right_hfs = _horizon_from_shoulder(config.translation_pico_horizon_from_right_shoulder_m)
+    left_shoulder_to_horizon = _shoulder_to_horizon(config.translation_left_shoulder_to_horizon_m)
+    right_shoulder_to_horizon = _shoulder_to_horizon(config.translation_right_shoulder_to_horizon_m)
 
     scale = config.robot_size_m / config.human_size_m
 
     return CoordinateFrames(
-        left=_arm_frames(left_pose, left_sfb, left_hfs, config, scale),
-        right=_arm_frames(right_pose, right_sfb, right_hfs, config, scale),
+        left=_arm_frames(left_pose, left_arm_base_to_shoulder, left_shoulder_to_horizon, config, scale),
+        right=_arm_frames(right_pose, right_arm_base_to_shoulder, right_shoulder_to_horizon, config, scale),
     )
