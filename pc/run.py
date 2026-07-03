@@ -45,10 +45,17 @@ class RosPublisher:
             p.position.x, p.position.y, p.position.z = frame[vi + 1:vi + 4]
             p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w = frame[vi + 4:vi + 8]
             poses.poses.append(p)
-        self.poses.publish(poses)
-        self.buttons.publish(self.U32(data=[frame[17], frame[18]]))
-        self.tracked.publish(self.U8(data=[int(frame[1]), int(frame[9])]))
-        self.rclpy.spin_once(self.node, timeout_sec=0)
+        if not self.rclpy.ok():
+            return
+        try:
+            self.poses.publish(poses)
+            self.buttons.publish(self.U32(data=[frame[17], frame[18]]))
+            self.tracked.publish(self.U8(data=[int(frame[1]), int(frame[9])]))
+            self.rclpy.spin_once(self.node, timeout_sec=0)
+        except Exception:
+            if not self.rclpy.ok():
+                return
+            raise
 
     def close(self):
         self.node.destroy_node()
@@ -178,7 +185,9 @@ async def main(args):
     finally:
         if monitor: monitor.cancel()
         if runner: await runner.cleanup()
-        if ros: ros.close()
+        if ros:
+            state.on_frame = None
+            ros.close()
 
 
 def parse_args(argv=None):
