@@ -9,6 +9,7 @@ class RosConfig:
     poses_topic: str = "/read_pico/poses"
     tracked_topic: str = "/read_pico/tracked"
     max_pose_age_s: float = 0.25
+    pico_disconnect_s: float = 0.5
 
 
 @dataclass(frozen=True)

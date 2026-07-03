@@ -18,7 +18,15 @@ class NeroIK:
         urdf_path = Path(ik_config.urdf_path)
         if not urdf_path.is_absolute():
             urdf_path = Path(__file__).resolve().parent / urdf_path
-        self.robot = rtb.Robot.URDF(str(urdf_path))
+        links, name, urdf_string, urdf_filepath = rtb.Robot.URDF_read(
+            str(urdf_path), tld=str(urdf_path.parent)
+        )
+        self.robot = rtb.Robot(
+            links,
+            name=name,
+            urdf_string=urdf_string,
+            urdf_filepath=urdf_filepath,
+        )
         self.q_prev = self.robot.q.copy()
 
     def solve(self, transform_arm_base_to_flange: np.ndarray) -> np.ndarray | None:

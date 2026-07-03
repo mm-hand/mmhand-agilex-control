@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import signal
 from pathlib import Path
 
 from config import FrameTransformConfig, IkConfig, RosConfig, SimConfig
@@ -10,6 +11,7 @@ from config import FrameTransformConfig, IkConfig, RosConfig, SimConfig
 def main() -> int:
     argparse.ArgumentParser(description="PICO -> nero dual-arm IK + Swift sim").parse_args()
     os.chdir(Path(__file__).resolve().parent)
+    signal.signal(signal.SIGINT, signal.default_int_handler)
 
     from sim import run_sim
 

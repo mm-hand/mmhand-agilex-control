@@ -23,6 +23,7 @@ class PicoPoseSubscriber:
         self.tracked = (0, 0)
         self.left: ControllerPose | None = None
         self.right: ControllerPose | None = None
+        self.last_poses_at: float = 0.0
         self.node.create_subscription(
             PoseArray, config.poses_topic, self._on_poses, qos_profile_sensor_data
         )
@@ -32,6 +33,7 @@ class PicoPoseSubscriber:
 
     def _on_poses(self, msg: PoseArray) -> None:
         now = time.monotonic()
+        self.last_poses_at = now
         n = len(msg.poses)
         self.left = (
             ControllerPose.from_ros_pose(msg.poses[0], now)
@@ -52,6 +54,9 @@ class PicoPoseSubscriber:
 
     def spin(self) -> None:
         self.executor.spin_once(timeout_sec=0)
+
+    def pico_connected(self, stale_s: float) -> bool:
+        return self.last_poses_at > 0.0 and time.monotonic() - self.last_poses_at < stale_s
 
     def _fresh(self, pose: ControllerPose | None) -> ControllerPose | None:
         if pose is None or time.monotonic() - pose.received_at > self.config.max_pose_age_s:
