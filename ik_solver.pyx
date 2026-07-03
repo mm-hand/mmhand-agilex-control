@@ -7,9 +7,135 @@ import numpy as np
 cimport numpy as np
 from scipy.optimize import minimize_scalar
 
+cdef double PI = math.pi
+cdef double TWO_PI = 2.0 * math.pi
 
-cdef double _wrap_to_pi_scalar(double x):
-    return (x + math.pi) % (2.0 * math.pi) - math.pi
+# ── C-level 4×4 matrix helpers (double[16], row-major) ──────────────
+
+cdef inline void _mat4_eye(double* o):
+    o[0]=1; o[1]=0; o[2]=0; o[3]=0
+    o[4]=0; o[5]=1; o[6]=0; o[7]=0
+    o[8]=0; o[9]=0; o[10]=1; o[11]=0
+    o[12]=0; o[13]=0; o[14]=0; o[15]=1
+
+cdef void _mat4_mul(double* A, double* B, double* o):
+    cdef double t[16]
+    t[0]=A[0]*B[0]+A[1]*B[4]+A[2]*B[8]+A[3]*B[12]
+    t[1]=A[0]*B[1]+A[1]*B[5]+A[2]*B[9]+A[3]*B[13]
+    t[2]=A[0]*B[2]+A[1]*B[6]+A[2]*B[10]+A[3]*B[14]
+    t[3]=A[0]*B[3]+A[1]*B[7]+A[2]*B[11]+A[3]*B[15]
+    t[4]=A[4]*B[0]+A[5]*B[4]+A[6]*B[8]+A[7]*B[12]
+    t[5]=A[4]*B[1]+A[5]*B[5]+A[6]*B[9]+A[7]*B[13]
+    t[6]=A[4]*B[2]+A[5]*B[6]+A[6]*B[10]+A[7]*B[14]
+    t[7]=A[4]*B[3]+A[5]*B[7]+A[6]*B[11]+A[7]*B[15]
+    t[8]=A[8]*B[0]+A[9]*B[4]+A[10]*B[8]+A[11]*B[12]
+    t[9]=A[8]*B[1]+A[9]*B[5]+A[10]*B[9]+A[11]*B[13]
+    t[10]=A[8]*B[2]+A[9]*B[6]+A[10]*B[10]+A[11]*B[14]
+    t[11]=A[8]*B[3]+A[9]*B[7]+A[10]*B[11]+A[11]*B[15]
+    t[12]=A[12]*B[0]+A[13]*B[4]+A[14]*B[8]+A[15]*B[12]
+    t[13]=A[12]*B[1]+A[13]*B[5]+A[14]*B[9]+A[15]*B[13]
+    t[14]=A[12]*B[2]+A[13]*B[6]+A[14]*B[10]+A[15]*B[14]
+    t[15]=A[12]*B[3]+A[13]*B[7]+A[14]*B[11]+A[15]*B[15]
+    cdef int i
+    for i in range(16):
+        o[i] = t[i]
+
+cdef inline void _dh_A_into(double theta, double d, double a_prev, double alpha_prev, double* o):
+    cdef double ca = math.cos(alpha_prev)
+    cdef double sa = math.sin(alpha_prev)
+    cdef double ct = math.cos(theta)
+    cdef double st = math.sin(theta)
+    o[0]=ct;      o[1]=-st;     o[2]=0.0;    o[3]=a_prev
+    o[4]=ca*st;   o[5]=ca*ct;   o[6]=-sa;    o[7]=-sa*d
+    o[8]=sa*st;   o[9]=sa*ct;   o[10]=ca;    o[11]=ca*d
+    o[12]=0.0;    o[13]=0.0;    o[14]=0.0;   o[15]=1.0
+
+cdef inline void _invert_rigid_into(double* T, double* o):
+    o[0]=T[0]; o[1]=T[4]; o[2]=T[8]
+    o[4]=T[1]; o[5]=T[5]; o[6]=T[9]
+    o[8]=T[2]; o[9]=T[6]; o[10]=T[10]
+    o[3]=-(o[0]*T[3]+o[1]*T[7]+o[2]*T[11])
+    o[7]=-(o[4]*T[3]+o[5]*T[7]+o[6]*T[11])
+    o[11]=-(o[8]*T[3]+o[9]*T[7]+o[10]*T[11])
+    o[12]=0.0; o[13]=0.0; o[14]=0.0; o[15]=1.0
+
+cdef inline void _np4_to_c(np.ndarray src, double* dst):
+    dst[0]=src[0,0]; dst[1]=src[0,1]; dst[2]=src[0,2]; dst[3]=src[0,3]
+    dst[4]=src[1,0]; dst[5]=src[1,1]; dst[6]=src[1,2]; dst[7]=src[1,3]
+    dst[8]=src[2,0]; dst[9]=src[2,1]; dst[10]=src[2,2]; dst[11]=src[2,3]
+    dst[12]=src[3,0]; dst[13]=src[3,1]; dst[14]=src[3,2]; dst[15]=src[3,3]
+
+cdef inline void _c_to_np4(double* src, np.ndarray dst):
+    dst[0,0]=src[0]; dst[0,1]=src[1]; dst[0,2]=src[2]; dst[0,3]=src[3]
+    dst[1,0]=src[4]; dst[1,1]=src[5]; dst[1,2]=src[6]; dst[1,3]=src[7]
+    dst[2,0]=src[8]; dst[2,1]=src[9]; dst[2,2]=src[10]; dst[2,3]=src[11]
+    dst[3,0]=src[12]; dst[3,1]=src[13]; dst[3,2]=src[14]; dst[3,3]=src[15]
+
+# ── Scalar helpers for dedup and scoring ────────────────────────────
+
+cdef inline double _wrap_to_pi_scalar(double x):
+    return (x + PI) % TWO_PI - PI
+
+cdef bint _is_duplicate(np.ndarray q, list unique_sols):
+    cdef int i, j, n = len(unique_sols)
+    cdef np.ndarray u
+    cdef double d, diff
+    for i in range(n):
+        u = unique_sols[i]
+        d = 0.0
+        for j in range(7):
+            diff = q[j] - u[j]
+            if diff > PI: diff -= TWO_PI
+            elif diff < -PI: diff += TWO_PI
+            d += diff * diff
+        if d < 1e-8:
+            return True
+    return False
+
+cdef double _wrap_diff_norm7(np.ndarray a, np.ndarray b):
+    cdef double s = 0.0, d
+    cdef int i
+    for i in range(7):
+        d = a[i] - b[i]
+        if d > PI: d -= TWO_PI
+        elif d < -PI: d += TWO_PI
+        s += d * d
+    return math.sqrt(s)
+
+cdef double _wrap_diff_norm7_2prev(np.ndarray q, np.ndarray q_prev, np.ndarray q_prev2):
+    cdef double s = 0.0, d
+    cdef int i
+    for i in range(7):
+        d = q[i] - 2.0 * q_prev[i] + q_prev2[i]
+        if d > PI: d -= TWO_PI
+        elif d < -PI: d += TWO_PI
+        s += d * d
+    return math.sqrt(s)
+
+cdef double _pose_error_norm(np.ndarray T_cur, np.ndarray T_des):
+    cdef double dpx = T_cur[0,3]-T_des[0,3]
+    cdef double dpy = T_cur[1,3]-T_des[1,3]
+    cdef double dpz = T_cur[2,3]-T_des[2,3]
+    cdef double rex = 0.5*((T_cur[1,0]*T_des[2,0]-T_cur[2,0]*T_des[1,0])
+        +(T_cur[1,1]*T_des[2,1]-T_cur[2,1]*T_des[1,1])
+        +(T_cur[1,2]*T_des[2,2]-T_cur[2,2]*T_des[1,2]))
+    cdef double rey = 0.5*((T_cur[2,0]*T_des[0,0]-T_cur[0,0]*T_des[2,0])
+        +(T_cur[2,1]*T_des[0,1]-T_cur[0,1]*T_des[2,1])
+        +(T_cur[2,2]*T_des[0,2]-T_cur[0,2]*T_des[2,2]))
+    cdef double rez = 0.5*((T_cur[0,0]*T_des[1,0]-T_cur[1,0]*T_des[0,0])
+        +(T_cur[0,1]*T_des[1,1]-T_cur[1,1]*T_des[0,1])
+        +(T_cur[0,2]*T_des[1,2]-T_cur[1,2]*T_des[0,2]))
+    return math.sqrt(dpx*dpx+dpy*dpy+dpz*dpz+rex*rex+rey*rey+rez*rez)
+
+cdef double _dist7(np.ndarray a, np.ndarray b):
+    cdef double s = 0.0, d
+    cdef int i
+    for i in range(7):
+        d = a[i] - b[i]
+        if d > PI: d -= TWO_PI
+        elif d < -PI: d += TWO_PI
+        s += d * d
+    return math.sqrt(s)
 
 
 cpdef wrap_to_pi(x):
@@ -176,28 +302,47 @@ class ContinuityRuntimeState:
 
 cpdef list fk_all(np.ndarray q, object p):
     cdef list Ts = [np.eye(4, dtype=float)]
-    cdef np.ndarray T = np.eye(4, dtype=float)
+    cdef double Tc[16], T_dh[16]
     cdef np.ndarray d_i = p.d_i
     cdef np.ndarray a_prev = p.a_prev
     cdef np.ndarray alpha_prev = p.alpha_prev
     cdef np.ndarray theta_offset = p.theta_offset
     cdef int i
     cdef double theta
+    cdef np.ndarray T_np
+    _mat4_eye(Tc)
     for i in range(7):
         theta = q[i] + theta_offset[i]
-        T = T @ _dh_A(theta, d_i[i], a_prev[i], alpha_prev[i])
-        Ts.append(T.copy())
+        _dh_A_into(theta, d_i[i], a_prev[i], alpha_prev[i], T_dh)
+        _mat4_mul(Tc, T_dh, Tc)
+        T_np = np.empty((4, 4), dtype=float)
+        _c_to_np4(Tc, T_np)
+        Ts.append(T_np)
     return Ts
 
 
 cpdef np.ndarray fk(np.ndarray q, object p=None):
     if p is None:
         p = NeroParams.default()
-    cdef list Ts = fk_all(q, p)
-    cdef np.ndarray T = Ts[len(Ts) - 1]
-    cdef np.ndarray T_post = np.eye(4, dtype=float)
-    T_post[2, 3] = p.post_transform_d8
-    return T @ T_post
+    cdef double Tc[16], T_dh[16], T_post[16]
+    cdef np.ndarray d_i = p.d_i
+    cdef np.ndarray a_prev = p.a_prev
+    cdef np.ndarray alpha_prev = p.alpha_prev
+    cdef np.ndarray theta_offset = p.theta_offset
+    cdef int i
+    cdef double theta
+    _mat4_eye(Tc)
+    for i in range(7):
+        theta = q[i] + theta_offset[i]
+        _dh_A_into(theta, d_i[i], a_prev[i], alpha_prev[i], T_dh)
+        _mat4_mul(Tc, T_dh, Tc)
+    if p.post_transform_d8 != 0.0:
+        _mat4_eye(T_post)
+        T_post[11] = p.post_transform_d8
+        _mat4_mul(Tc, T_post, Tc)
+    cdef np.ndarray result = np.empty((4, 4), dtype=float)
+    _c_to_np4(Tc, result)
+    return result
 
 
 cdef bint _within_limits(np.ndarray q, np.ndarray limits):
@@ -206,6 +351,79 @@ cdef bint _within_limits(np.ndarray q, np.ndarray limits):
         if q[i] < limits[i, 0] - 1e-8 or q[i] > limits[i, 1] + 1e-8:
             return False
     return True
+
+
+cdef list _solve_q123_c(double Ex, double Ey, double Ez,
+                         double Wx, double Wy, double Wz,
+                         double q4, double d0, double d2, double d4):
+    cdef list sols = []
+    cdef double rho = math.hypot(Ex, Ey)
+    cdef double c2 = (Ez - d0) / d2
+    if c2 < -1.0 - 1e-8 or c2 > 1.0 + 1e-8:
+        return []
+    if c2 < -1.0: c2 = -1.0
+    elif c2 > 1.0: c2 = 1.0
+    cdef double s2_abs = math.sqrt(max(0.0, 1.0 - c2 * c2))
+    if rho > abs(d2) + 1e-7:
+        return []
+
+    cdef double vx = Wx - Ex, vy = Wy - Ey, vz = Wz - Ez
+    cdef double n_v = math.sqrt(vx*vx + vy*vy + vz*vz)
+    if n_v < 1e-10:
+        return []
+    cdef double u1 = -vx / d4, u2 = -vy / d4, u3 = -vz / d4
+    cdef double n_col = math.sqrt(u1*u1 + u2*u2 + u3*u3)
+    if n_col < 1e-12: n_col = 1e-12
+    u1 /= n_col; u2 /= n_col; u3 /= n_col
+
+    cdef double s4 = math.sin(q4), c4 = math.cos(q4)
+    if abs(s4) < 1e-8:
+        return []
+
+    cdef double s2, c1, s1, n1, q1, q2, b1, b2, s3, c2c3, c3, n3
+    for s2 in (s2_abs, -s2_abs):
+        if abs(s2) < 1e-10:
+            continue
+        c1 = -Ex / (d2 * s2)
+        s1 = -Ey / (d2 * s2)
+        n1 = math.hypot(c1, s1)
+        if n1 < 1e-12:
+            continue
+        c1 /= n1; s1 /= n1
+        q1 = math.atan2(s1, c1)
+        q2 = math.atan2(s2, c2)
+        b1 = (s2 * c1 * c4 - u1) / s4
+        b2 = (u2 - s1 * s2 * c4) / s4
+        s3 = s1 * b1 + c1 * b2
+        c2c3 = -c1 * b1 + s1 * b2
+        if abs(c2) > 1e-8:
+            c3 = c2c3 / c2
+        else:
+            c3 = (u3 + c2 * c4) / (s2 * s4)
+        n3 = math.hypot(s3, c3)
+        if n3 < 1e-12:
+            continue
+        s3 /= n3; c3 /= n3
+        sols.append((q1, q2, math.atan2(s3, c3)))
+    return sols
+
+
+cdef list _extract_567_c(double* T47):
+    cdef list sols = []
+    cdef double c6 = T47[6]
+    cdef double s6, th5, th6, th7
+    if c6 < -1.0: c6 = -1.0
+    elif c6 > 1.0: c6 = 1.0
+    cdef double sgn
+    for sgn in (1.0, -1.0):
+        s6 = sgn * math.sqrt(max(0.0, 1.0 - c6 * c6))
+        if abs(s6) < 1e-8:
+            continue
+        th6 = math.atan2(s6, c6)
+        th5 = math.atan2(T47[10] / s6, T47[2] / s6)
+        th7 = math.atan2(T47[5] / s6, -T47[4] / s6)
+        sols.append((th5, th6, th7))
+    return sols
 
 
 def _extract_123_from_R03_paper(R03: np.ndarray) -> List[np.ndarray]:
@@ -593,7 +811,7 @@ def _qp_1d_objective(
 
     # 3. 位姿误差代价
     T_cur = fk(q_new, p)
-    pose_err = np.linalg.norm(pose_error(T_cur, T_target))
+    pose_err = _pose_error_norm(T_cur, T_target)
     pose_cost = continuity.w_qp_pose_err * (pose_err**2)
 
     return inc_cost + pose_cost + limit_penalty
@@ -669,67 +887,119 @@ def ik_arm_angle(
     return q_best, feasible_theta0
 
 
-cpdef list _ik_one_arm_angle(np.ndarray T07, double theta0, object p):
-    # Build S-W-E geometric primitives first (paper S-R-S flow).
-    S, W_from_pose, q4_abs, _ = _compute_swe_from_target(T07, p)
-    E_point = _elbow_from_arm_angle(S, W_from_pose, theta0, p)
+cpdef list _ik_one_arm_angle(np.ndarray T07_np, double theta0, object p):
+    cdef double T07[16], T_chain[16], T04[16], T_dh[16], T_inv[16], T47[16]
+    _np4_to_c(T07_np, T07)
 
-    # Rebuild chain-frame target without post transform for downstream T47.
-    T_chain = _remove_post_transform(T07, p)
-    if q4_abs is None:
-        return []
-    W = W_from_pose
-
-    cdef np.ndarray theta_offset = p.theta_offset
+    # Extract params once
+    cdef double d0 = p.d_i[0], d2 = p.d_i[2], d4 = p.d_i[4]
+    cdef double d6 = p.d_i[6], d8 = p.post_transform_d8
+    cdef np.ndarray theta_offset_np = p.theta_offset
     cdef np.ndarray d_i = p.d_i
     cdef np.ndarray a_prev = p.a_prev
     cdef np.ndarray alpha_prev = p.alpha_prev
     cdef np.ndarray joint_limits = p.joint_limits
+    cdef double to0=theta_offset_np[0], to1=theta_offset_np[1], to2=theta_offset_np[2]
+    cdef double to3=theta_offset_np[3], to4=theta_offset_np[4], to5=theta_offset_np[5], to6=theta_offset_np[6]
+
+    # S, W, q4_abs from C-array T07 (no numpy allocation)
+    cdef double z7x=T07[2], z7y=T07[6], z7z=T07[10]
+    cdef double O7x=T07[3]-d8*z7x, O7y=T07[7]-d8*z7y, O7z=T07[11]-d8*z7z
+    cdef double Wx=O7x-d6*z7x, Wy=O7y-d6*z7y, Wz=O7z-d6*z7z
+    cdef double Sx=0.0, Sy=0.0, Sz=d0
+
+    cdef double dx=Wx-Sx, dy=Wy-Sy, dz=Wz-Sz
+    cdef double l_sw=math.sqrt(dx*dx+dy*dy+dz*dz)
+    cdef double l_se=abs(d2), l_ew=abs(d4)
+    if l_sw < 1e-10:
+        return []
+    cdef double c4v=(l_sw*l_sw-l_se*l_se-l_ew*l_ew)/(2.0*l_se*l_ew)
+    if c4v < -1.0 or c4v > 1.0:
+        return []
+    if c4v < -1.0: c4v = -1.0
+    elif c4v > 1.0: c4v = 1.0
+    cdef double q4_abs=math.acos(c4v)
+
+    # Elbow E from theta0 (scalar, no numpy)
+    cdef double usx=dx/l_sw, usy=dy/l_sw, usz=dz/l_sw
+    cdef double xv=(l_se*l_se-l_ew*l_ew+l_sw*l_sw)/(2.0*l_sw)
+    cdef double r2v=l_se*l_se-xv*xv
+    if r2v < -1e-10:
+        return []
+    cdef double rv=math.sqrt(max(0.0, r2v))
+    cdef double Cx=Sx+xv*usx, Cy=Sy+xv*usy, Cz=Sz+xv*usz
+    cdef double tx=Sy*usz-Sz*usy, ty=Sz*usx-Sx*usz, tz=Sx*usy-Sy*usx
+    cdef double tn=math.sqrt(tx*tx+ty*ty+tz*tz)
+    if tn < 1e-10:
+        tx=usz; ty=0.0; tz=-usx; tn=math.sqrt(tx*tx+tz*tz)
+    if tn < 1e-10:
+        tx=-usz; ty=0.0; tz=usx; tn=math.sqrt(tx*tx+tz*tz)
+    if tn < 1e-12: tn=1e-12
+    cdef double e1x=tx/tn, e1y=ty/tn, e1z=tz/tn
+    cdef double e2x=usy*e1z-usz*e1y, e2y=usz*e1x-usx*e1z, e2z=usx*e1y-usy*e1x
+    cdef double e2n=math.sqrt(e2x*e2x+e2y*e2y+e2z*e2z)
+    if e2n < 1e-12: e2n=1e-12
+    e2x/=e2n; e2y/=e2n; e2z/=e2n
+    cdef double ct=math.cos(theta0), st=math.sin(theta0)
+    cdef double Ex=Cx+rv*(ct*e1x+st*e2x)
+    cdef double Ey=Cy+rv*(ct*e1y+st*e2y)
+    cdef double Ez=Cz+rv*(ct*e1z+st*e2z)
+
+    # T_chain = remove_post_transform(T07) in C
+    cdef int i
+    for i in range(16):
+        T_chain[i] = T07[i]
+    T_chain[3]  -= d8 * T_chain[2]
+    T_chain[7]  -= d8 * T_chain[6]
+    T_chain[11] -= d8 * T_chain[10]
+
     cdef list q_solutions = []
     cdef double q4, th1, th2, th3, th4, th5, th6, th7
-    cdef np.ndarray T04, T47, q, extra, theta_raw
-    cdef list q123_sols
-    cdef int i
+    cdef list q123_sols, th567_sols
+    cdef tuple q123, th567
+    cdef bint ok
+    cdef int j
+    cdef np.ndarray q_np, extra_np
 
     for q4 in (q4_abs, -q4_abs):
-        if E_point is None:
-            continue
-        q123_sols = _solve_q123_from_swe(E_point, W, q4, p)
+        q123_sols = _solve_q123_c(Ex, Ey, Ez, Wx, Wy, Wz, q4, d0, d2, d4)
         for q123 in q123_sols:
-            th1 = q123[0] + theta_offset[0]
-            th2 = q123[1] + theta_offset[1]
-            th3 = q123[2] + theta_offset[2]
-            th4 = q4 + theta_offset[3]
+            th1 = q123[0] + to0
+            th2 = q123[1] + to1
+            th3 = q123[2] + to2
+            th4 = q4 + to3
 
-            T04 = np.eye(4, dtype=float)
-            T04 = T04 @ _dh_A(th1, d_i[0], a_prev[0], alpha_prev[0])
-            T04 = T04 @ _dh_A(th2, d_i[1], a_prev[1], alpha_prev[1])
-            T04 = T04 @ _dh_A(th3, d_i[2], a_prev[2], alpha_prev[2])
-            T04 = T04 @ _dh_A(th4, d_i[3], a_prev[3], alpha_prev[3])
-            T47 = _invert_rigid_transform(T04) @ T_chain
+            _dh_A_into(th1, d_i[0], a_prev[0], alpha_prev[0], T04)
+            _dh_A_into(th2, d_i[1], a_prev[1], alpha_prev[1], T_dh)
+            _mat4_mul(T04, T_dh, T04)
+            _dh_A_into(th3, d_i[2], a_prev[2], alpha_prev[2], T_dh)
+            _mat4_mul(T04, T_dh, T04)
+            _dh_A_into(th4, d_i[3], a_prev[3], alpha_prev[3], T_dh)
+            _mat4_mul(T04, T_dh, T04)
 
-            for th567 in _extract_567_from_T47_paper(T47):
-                th5 = th567[0]
-                th6 = th567[1]
-                th7 = th567[2]
-                theta_raw = np.array([th1, th2, th3, th4, th5, th6, th7], dtype=float)
-                q = wrap_to_pi(theta_raw - theta_offset)
-                if _within_limits(q, joint_limits):
-                    extra = np.array(
-                        [
-                            theta0,
-                            S[0], S[1], S[2],
-                            W[0], W[1], W[2],
-                            *(
-                                E_point.tolist()
-                                if E_point is not None
-                                else [np.nan, np.nan, np.nan]
-                            ),
-                        ],
-                        dtype=float,
-                    )
-                    q = np.concatenate([q, extra])
-                    q_solutions.append(q)
+            _invert_rigid_into(T04, T_inv)
+            _mat4_mul(T_inv, T_chain, T47)
+
+            for th567 in _extract_567_c(T47):
+                th5 = th567[0]; th6 = th567[1]; th7 = th567[2]
+                q_np = np.array([
+                    _wrap_to_pi_scalar(th1 - to0),
+                    _wrap_to_pi_scalar(th2 - to1),
+                    _wrap_to_pi_scalar(th3 - to2),
+                    _wrap_to_pi_scalar(th4 - to3),
+                    _wrap_to_pi_scalar(th5 - to4),
+                    _wrap_to_pi_scalar(th6 - to5),
+                    _wrap_to_pi_scalar(th7 - to6),
+                ], dtype=float)
+                ok = True
+                for j in range(7):
+                    if q_np[j] < joint_limits[j, 0] - 1e-8 or q_np[j] > joint_limits[j, 1] + 1e-8:
+                        ok = False
+                        break
+                if not ok:
+                    continue
+                extra_np = np.array([theta0, Sx, Sy, Sz, Wx, Wy, Wz, Ex, Ey, Ez], dtype=float)
+                q_solutions.append(np.concatenate([q_np, extra_np]))
     return q_solutions
 
 
@@ -755,14 +1025,13 @@ def _collect_unique_solutions_for_theta0_grid(
     T: np.ndarray, p: NeroParams, theta0_grid: np.ndarray
 ) -> List[np.ndarray]:
     all_solutions: List[np.ndarray] = []
+    cdef double t
     for theta0 in theta0_grid:
-        t = float(wrap_to_pi(np.array([theta0]))[0])
+        t = _wrap_to_pi_scalar(float(theta0))
         all_solutions.extend(_ik_one_arm_angle(T, t, p))
     unique_solutions: List[np.ndarray] = []
     for q in all_solutions:
-        if not any(
-            np.linalg.norm(wrap_to_pi(q[:7] - u[:7])) < 1e-4 for u in unique_solutions
-        ):
+        if not _is_duplicate(q, unique_solutions):
             unique_solutions.append(q)
     return unique_solutions
 
@@ -853,7 +1122,7 @@ def ik_arm_angle_with_report(
         "E": q_best_full[14:17].tolist(),
         "q4_abs": None if q4_dbg is None else float(q4_dbg),
     }
-    e_best = float(np.linalg.norm(pose_error(fk(q_best, p), T)))
+    e_best = _pose_error_norm(fk(q_best, p), T)
     all_solutions = [q_best_full]
     return (
         q_best,
@@ -1020,18 +1289,16 @@ def solve_pose_continuous_with_state(
     for cand in all_solutions:
         q = cand[:7]
         theta0 = float(cand[7]) if cand.shape[0] > 7 else 0.0
-        dq = wrap_to_pi(q - q_prev)
-        vel_cost = float(np.linalg.norm(dq))
+        vel_cost = _wrap_diff_norm7(q, q_prev)
         if q_prev2 is not None:
-            ddq = wrap_to_pi(q - 2.0 * q_prev + q_prev2)
-            acc_cost = float(np.linalg.norm(ddq))
+            acc_cost = _wrap_diff_norm7_2prev(q, q_prev, q_prev2)
         else:
             acc_cost = 0.0
-        pose_cost = float(np.linalg.norm(pose_error(fk(q, p), T)))
+        pose_cost = _pose_error_norm(fk(q, p), T)
         if theta0_prev is None:
             theta0_cost = 0.0
         else:
-            theta0_cost = abs(float(wrap_to_pi(np.array([theta0 - theta0_prev]))[0]))
+            theta0_cost = abs(_wrap_to_pi_scalar(theta0 - theta0_prev))
         score = (
             continuity.w_vel * vel_cost
             + continuity.w_acc * acc_cost
@@ -1047,7 +1314,7 @@ def solve_pose_continuous_with_state(
     selected_by = "best_score"
     if q_lock is not None:
         lock_item = min(
-            scored, key=lambda x: float(np.linalg.norm(wrap_to_pi(x[5][:7] - q_lock)))
+            scored, key=lambda x: _dist7(x[5][:7], q_lock)
         )
         if lock_item[0] <= best[0] + continuity.hysteresis_margin:
             selected = lock_item
@@ -1061,7 +1328,7 @@ def solve_pose_continuous_with_state(
     if continuity.enable_qp:
         q_best = _optimize_q_with_1d_qp(q_best, T, p, continuity)
 
-    pose_best = float(np.linalg.norm(pose_error(fk(q_best, p), T)))
+    pose_best = _pose_error_norm(fk(q_best, p), T)
 
     next_state = ContinuityRuntimeState(
         q_prev=q_best,
