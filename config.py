@@ -33,11 +33,18 @@ class FrameTransformConfig:
 @dataclass(frozen=True)
 class IkConfig:
     urdf_path: str = "nero_urdf/nero.urdf"
-    max_iter: int = 500
-    tol: float = 1e-4
-    slimit: int = 100
-    method: str = "sugihara"
-    k: float = 0.01
+    n_psi: int = 181
+    local_theta0_window: float = 0.35
+    local_theta0_count: int = 11
+    w_vel: float = 1.0
+    w_acc: float = 0.25
+    w_pose: float = 0.1
+    w_theta0: float = 0.15
+    hysteresis_margin: float = 0.03
+    enable_global_fallback: bool = True
+    enable_qp: bool = False
+    w_qp_joint_inc: float = 1.0
+    w_qp_pose_err: float = 0.5
 
 
 @dataclass(frozen=True)

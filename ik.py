@@ -3,13 +3,37 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
-from spatialmath import SE3
 
 from config import IkConfig
+from ik_solver import (
+    ContinuityParams,
+    ContinuityRuntimeState,
+    NeroParams,
+    solve_pose_continuous_with_state,
+)
+from transforms import (
+    invert_transform,
+    rotation_matrix_from_rpy_rad,
+    transform_from_rotation_and_translation,
+)
+
+# URDF revo2_flange_joint origin (parent=link7, child=revo2_flange):
+#   xyz="0.032 0 -0.0235", rpy="-1.5708 0 -1.5708" (radians)
+# Builds ^link7 T_flange, then inverts to ^flange T_link7 so that
+# incoming flange targets can be converted to link7 targets for the IK.
+_R_LINK7_TO_FLANGE = rotation_matrix_from_rpy_rad(-1.5708, 0.0, -1.5708)
+_T_LINK7_TO_FLANGE = transform_from_rotation_and_translation(
+    _R_LINK7_TO_FLANGE, (0.032, 0.0, -0.0235)
+)
+_T_FLANGE_TO_LINK7 = invert_transform(_T_LINK7_TO_FLANGE)
 
 
 class NeroIK:
-    """Nero arm IK with revo2_flange as the end-effector link."""
+    """Nero arm IK with revo2_flange as the end-effector link.
+
+    Uses analytic arm-angle parameterized IK (ik_solver) for solving and
+    roboticstoolbox Robot for Swift visualization.
+    """
 
     def __init__(self, ik_config: IkConfig) -> None:
         import roboticstoolbox as rtb
@@ -27,23 +51,31 @@ class NeroIK:
             urdf_string=urdf_string,
             urdf_filepath=urdf_filepath,
         )
-        self.q_prev = self.robot.q.copy()
+
+        self._p = NeroParams.default()
+        self._n_psi = ik_config.n_psi
+        self._continuity = ContinuityParams(
+            local_theta0_window=ik_config.local_theta0_window,
+            local_theta0_count=ik_config.local_theta0_count,
+            w_vel=ik_config.w_vel,
+            w_acc=ik_config.w_acc,
+            w_pose=ik_config.w_pose,
+            w_theta0=ik_config.w_theta0,
+            hysteresis_margin=ik_config.hysteresis_margin,
+            enable_global_fallback=ik_config.enable_global_fallback,
+            enable_qp=ik_config.enable_qp,
+            w_qp_joint_inc=ik_config.w_qp_joint_inc,
+            w_qp_pose_err=ik_config.w_qp_pose_err,
+        )
+        self._state = ContinuityRuntimeState(q_prev=self.robot.q.copy())
 
     def solve(self, transform_arm_base_to_flange: np.ndarray) -> np.ndarray | None:
-        rotation = transform_arm_base_to_flange[:3, :3]
-        translation = transform_arm_base_to_flange[:3, 3]
-        sol = self.robot.ik_LM(
-            SE3.Rt(rotation, translation),
-            q0=self.q_prev,
-            tol=self.config.tol,
-            ilimit=self.config.max_iter,
-            slimit=self.config.slimit,
-            k=self.config.k,
-            method=self.config.method,
-            end="revo2_flange",
+        T07 = transform_arm_base_to_flange @ _T_FLANGE_TO_LINK7
+        q, _report, self._state = solve_pose_continuous_with_state(
+            T07,
+            state=self._state,
+            p=self._p,
+            n_psi=self._n_psi,
+            continuity=self._continuity,
         )
-        if int(sol[1]) <= 0:
-            return None
-        q = np.asarray(sol[0]).reshape(-1)
-        self.q_prev = q
         return q
