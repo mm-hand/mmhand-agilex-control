@@ -8,8 +8,8 @@ from rclpy.executors import SingleThreadedExecutor
 from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import UInt8MultiArray
 
-from .config import RosConfig
-from .frames import ControllerPose
+from config import RosConfig
+from frames import ControllerPose
 
 
 class PicoPoseSubscriber:

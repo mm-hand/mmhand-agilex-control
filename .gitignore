@@ -1,4 +1,6 @@
 __pycache__/
 *.pyc
-*.urdf
-/tmp/
+build/
+install/
+log/
+.venv*/
