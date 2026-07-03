@@ -417,8 +417,11 @@ cdef list _extract_567_c(double* T47):
     cdef double sgn
     for sgn in (1.0, -1.0):
         s6 = sgn * math.sqrt(max(0.0, 1.0 - c6 * c6))
-        if abs(s6) < 1e-8:
-            continue
+        # 腕部奇异保护: q6≈0 时 s6≈0 (球形腕两轴重合, q5/q7 不可分辨)。
+        # 不跳过该分支，而是钳制 s6 到小值，保留近似解。
+        # 打分阶段的 pose_cost 会自然惩罚不精确的解。
+        if abs(s6) < 1e-4:
+            s6 = sgn * 1e-4
         th6 = math.atan2(s6, c6)
         th5 = math.atan2(T47[10] / s6, T47[2] / s6)
         th7 = math.atan2(T47[5] / s6, -T47[4] / s6)
@@ -457,8 +460,9 @@ cdef list _extract_567_from_T47_paper(np.ndarray T47):
     cdef double sgn
     for sgn in (1.0, -1.0):
         s6 = sgn * math.sqrt(max(0.0, 1.0 - c6 * c6))
-        if abs(s6) < 1e-8:
-            continue
+        # 腕部奇异保护: 钳制到小值而非跳过 (同 _extract_567_c)
+        if abs(s6) < 1e-4:
+            s6 = sgn * 1e-4
         th6 = math.atan2(s6, c6)
         th5 = math.atan2(T47[2, 2] / s6, T47[0, 2] / s6)
         th7 = math.atan2(T47[1, 1] / s6, -T47[1, 0] / s6)

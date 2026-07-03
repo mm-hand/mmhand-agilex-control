@@ -71,6 +71,7 @@ class NeroIK:
 
     def solve(self, transform_arm_base_to_flange: np.ndarray) -> np.ndarray | None:
         T07 = transform_arm_base_to_flange @ _T_FLANGE_TO_LINK7
+        T07 = self._clamp_target_reach(T07)
         q, _report, self._state = solve_pose_continuous_with_state(
             T07,
             state=self._state,
@@ -79,3 +80,48 @@ class NeroIK:
             continuity=self._continuity,
         )
         return q
+
+    def _clamp_target_reach(self, T07: np.ndarray) -> np.ndarray:
+        """钳制目标位姿到安全可达范围，避免肘部奇异。
+
+        Nero 上臂长 l_se = 0.31m，前臂长 l_ew = 0.27m。
+        - 最大臂展 = l_se + l_ew = 0.58m：当 |SW| 接近此值时，
+          SEW 三角形退化 (q4→0，肘部完全伸直)，臂角参数化 IK 无解。
+        - 最小折叠 = |l_se - l_ew| = 0.04m：当 |SW| 接近此值时，
+          三角形同样退化（肘部完全折叠）。
+
+        本方法将腕心 W 沿肩→腕方向回缩/外推到安全范围，
+        保持末端姿态(旋转)不变，仅修正平移分量。
+        安全边界取 95%/105%，留 5% 余量确保 SEW 三角形非退化。
+        """
+        p = self._p
+        # 从 T07 计算 S, W（与 ik_solver._compute_swe_from_target 相同的几何）
+        d1 = float(p.d_i[0])     # 肩高度: 0.138
+        d6 = float(p.d_i[6])     # 腕到 link7: 0.0235
+        d8 = p.post_transform_d8  # post-transform: 0.0
+
+        z7 = T07[:3, 2]                    # link7 z 轴 = 旋转矩阵第三列
+        O7 = T07[:3, 3] - d8 * z7          # link7 原点（去除 post-transform）
+        W = O7 - d6 * z7                   # 腕心 = link7 原点沿 z7 回退 d6
+        S = np.array([0.0, 0.0, d1])       # 肩心 = base + d1·z
+
+        SW = W - S
+        dist = float(np.linalg.norm(SW))
+        l_se = abs(float(p.d_i[2]))        # 0.31
+        l_ew = abs(float(p.d_i[4]))        # 0.27
+        max_safe = 0.95 * (l_se + l_ew)    # 0.551m
+        min_safe = 1.05 * abs(l_se - l_ew) # 0.042m
+
+        if dist < 1e-10 or min_safe <= dist <= max_safe:
+            return T07  # 在安全范围内或退化情况，不修正
+
+        # 钳制 |SW| 到安全范围
+        target_dist = max(min_safe, min(max_safe, dist))
+        scale = target_dist / dist
+        W_clamped = S + SW * scale
+
+        # 从修正后的 W 反算 T07 平移（保持旋转不变）
+        O7_clamped = W_clamped + d6 * z7
+        T07_clamped = T07.copy()
+        T07_clamped[:3, 3] = O7_clamped + d8 * z7
+        return T07_clamped

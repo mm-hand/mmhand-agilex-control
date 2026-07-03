@@ -38,7 +38,7 @@ def _random_q(p: NeroParams, n: int, seed: int = 42) -> list[np.ndarray]:
     qs = []
     while len(qs) < n:
         q = rng.uniform(p.joint_limits[:, 0], p.joint_limits[:, 1])
-        if abs(q[3]) > 0.3:  # skip near-singular (fully extended) configs
+        if abs(q[3]) > 0.7:  # skip near-singular (fully extended) configs
             qs.append(q)
     return qs
 

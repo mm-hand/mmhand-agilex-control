@@ -215,6 +215,8 @@ def run_sim(
     n = 0
     last_status = ""
     pico_stale_s = ros_cfg.pico_disconnect_s
+    # IK hold print rate limit: at most once per second per arm.
+    last_hold_print = [0.0, 0.0]  # [left, right]
     try:
         while True:
             sub.spin()
@@ -225,7 +227,10 @@ def run_sim(
                 if q is not None:
                     left_ik.robot.q = q
                 else:
-                    print("[IK] L hold", flush=True)
+                    now = time.monotonic()
+                    if now - last_hold_print[0] > 1.0:
+                        print("[IK] L hold", flush=True)
+                        last_hold_print[0] = now
                 left_controller.T = _swift_se3(frames.left.transform_horizon_to_controller).A
                 left_flange.T = _swift_se3(frames.left.transform_horizon_to_flange).A
 
@@ -234,7 +239,10 @@ def run_sim(
                 if q is not None:
                     right_ik.robot.q = q
                 else:
-                    print("[IK] R hold", flush=True)
+                    now = time.monotonic()
+                    if now - last_hold_print[1] > 1.0:
+                        print("[IK] R hold", flush=True)
+                        last_hold_print[1] = now
                 right_controller.T = _swift_se3(frames.right.transform_horizon_to_controller).A
                 right_flange.T = _swift_se3(frames.right.transform_horizon_to_flange).A
 
