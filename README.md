@@ -22,18 +22,14 @@ Use this first. You only need the APK build toolchain to rebuild the headset app
 ### PC-side tools (Ubuntu)
 
 ```bash
-sudo apt install -y adb python3 python3-aiohttp
-```
-
-### ROS 2 (optional)
-
-```bash
+sudo apt install -y adb
+pip install aiohttp
 source <(wget -qO- http://fishros.com/install)
 sudo apt install -y ros-jazzy-rclpy ros-jazzy-geometry-msgs ros-jazzy-std-msgs
-# Humble: replace jazzy with humble.
+# If you use Humble: replace jazzy with humble.
 ```
 
-### APK build toolchain (Ubuntu only)
+### APK build toolchain (Ubuntu only, if you want to modify apk)
 
 ```bash
 sudo apt install -y openjdk-17-jdk
