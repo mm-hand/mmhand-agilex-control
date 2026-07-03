@@ -1,68 +1,97 @@
+# cython: boundscheck=False, wraparound=False, cdivision=True, language_level=3
 import math
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+cimport numpy as np
 from scipy.optimize import minimize_scalar
 
 
-def wrap_to_pi(x: np.ndarray) -> np.ndarray:
+cdef double _wrap_to_pi_scalar(double x):
+    return (x + math.pi) % (2.0 * math.pi) - math.pi
+
+
+cpdef wrap_to_pi(x):
     return (x + np.pi) % (2.0 * np.pi) - np.pi
 
 
-def pose_error(T_cur: np.ndarray, T_des: np.ndarray) -> np.ndarray:
-    dp = T_cur[:3, 3] - T_des[:3, 3]
-    R = T_cur[:3, :3]
-    Rd = T_des[:3, :3]
-    re = 0.5 * (
-        np.cross(R[:, 0], Rd[:, 0])
-        + np.cross(R[:, 1], Rd[:, 1])
-        + np.cross(R[:, 2], Rd[:, 2])
+cpdef np.ndarray pose_error(np.ndarray T_cur, np.ndarray T_des):
+    cdef double dpx = T_cur[0, 3] - T_des[0, 3]
+    cdef double dpy = T_cur[1, 3] - T_des[1, 3]
+    cdef double dpz = T_cur[2, 3] - T_des[2, 3]
+    # Rotation error: 0.5 * sum of cross products of corresponding columns
+    cdef double rex = 0.5 * (
+        (T_cur[1, 0] * T_des[2, 0] - T_cur[2, 0] * T_des[1, 0])
+        + (T_cur[1, 1] * T_des[2, 1] - T_cur[2, 1] * T_des[1, 1])
+        + (T_cur[1, 2] * T_des[2, 2] - T_cur[2, 2] * T_des[1, 2])
     )
-    return np.hstack([dp, re])
+    cdef double rey = 0.5 * (
+        (T_cur[2, 0] * T_des[0, 0] - T_cur[0, 0] * T_des[2, 0])
+        + (T_cur[2, 1] * T_des[0, 1] - T_cur[0, 1] * T_des[2, 1])
+        + (T_cur[2, 2] * T_des[0, 2] - T_cur[0, 2] * T_des[2, 2])
+    )
+    cdef double rez = 0.5 * (
+        (T_cur[0, 0] * T_des[1, 0] - T_cur[1, 0] * T_des[0, 0])
+        + (T_cur[0, 1] * T_des[1, 1] - T_cur[1, 1] * T_des[0, 1])
+        + (T_cur[0, 2] * T_des[1, 2] - T_cur[1, 2] * T_des[0, 2])
+    )
+    return np.array([dpx, dpy, dpz, rex, rey, rez], dtype=float)
 
 
-def _rotz(t: float) -> np.ndarray:
-    c, s = math.cos(t), math.sin(t)
+cdef inline np.ndarray _rotz(double t):
+    cdef double c = math.cos(t)
+    cdef double s = math.sin(t)
     return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]], dtype=float)
 
 
-def _rotx(t: float) -> np.ndarray:
-    c, s = math.cos(t), math.sin(t)
+cdef inline np.ndarray _rotx(double t):
+    cdef double c = math.cos(t)
+    cdef double s = math.sin(t)
     return np.array([[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]], dtype=float)
 
 
-def _dh_A(theta: float, d: float, a_prev: float, alpha_prev: float) -> np.ndarray:
+cdef np.ndarray _dh_A(double theta, double d, double a_prev, double alpha_prev):
     # NOTE: YAIK/NERO uses Modified DH:
     # T_i^{i-1} = RotX(alpha_{i-1}) * TransX(a_{i-1}) * RotZ(theta_i) * TransZ(d_i)
-    T = np.eye(4)
-    Rx = _rotx(alpha_prev)
-    Rz = _rotz(theta)
-    T[:3, :3] = Rx @ Rz
-    T[:3, 3] = np.array(
-        [a_prev, -math.sin(alpha_prev) * d, math.cos(alpha_prev) * d],
-        dtype=float,
-    )
+    cdef double ca = math.cos(alpha_prev)
+    cdef double sa = math.sin(alpha_prev)
+    cdef double ct = math.cos(theta)
+    cdef double st = math.sin(theta)
+    cdef np.ndarray T = np.eye(4, dtype=float)
+    # T[:3, :3] = RotX(alpha) @ RotZ(theta)
+    T[0, 0] = ct;        T[0, 1] = -st;       T[0, 2] = 0.0
+    T[1, 0] = ca * st;   T[1, 1] = ca * ct;   T[1, 2] = -sa
+    T[2, 0] = sa * st;   T[2, 1] = sa * ct;   T[2, 2] = ca
+    T[0, 3] = a_prev
+    T[1, 3] = -sa * d
+    T[2, 3] = ca * d
     return T
 
 
-def _invert_rigid_transform(T: np.ndarray) -> np.ndarray:
-    R = T[:3, :3]
-    t = T[:3, 3]
-    Rt = R.T
-    out = np.eye(4, dtype=float)
-    out[:3, :3] = Rt
-    out[:3, 3] = -(Rt @ t)
+cdef np.ndarray _invert_rigid_transform(np.ndarray T):
+    cdef np.ndarray out = np.eye(4, dtype=float)
+    # out[:3, :3] = T[:3, :3].T
+    out[0, 0] = T[0, 0]; out[0, 1] = T[1, 0]; out[0, 2] = T[2, 0]
+    out[1, 0] = T[0, 1]; out[1, 1] = T[1, 1]; out[1, 2] = T[2, 1]
+    out[2, 0] = T[0, 2]; out[2, 1] = T[1, 2]; out[2, 2] = T[2, 2]
+    # out[:3, 3] = -(Rt @ t)
+    out[0, 3] = -(out[0, 0] * T[0, 3] + out[0, 1] * T[1, 3] + out[0, 2] * T[2, 3])
+    out[1, 3] = -(out[1, 0] * T[0, 3] + out[1, 1] * T[1, 3] + out[1, 2] * T[2, 3])
+    out[2, 3] = -(out[2, 0] * T[0, 3] + out[2, 1] * T[1, 3] + out[2, 2] * T[2, 3])
     return out
 
 
-def _remove_post_transform(T07: np.ndarray, p: "NeroParams") -> np.ndarray:
+cdef np.ndarray _remove_post_transform(np.ndarray T07, object p):
     """
     Equivalent to T07 @ inv(T_post) where T_post = TransZ(post_transform_d8),
     but avoids building/inverting a matrix each call.
     """
-    T_chain = np.array(T07, dtype=float, copy=True)
-    T_chain[:3, 3] = T07[:3, 3] - float(p.post_transform_d8) * T07[:3, 2]
+    cdef double d8 = p.post_transform_d8
+    cdef np.ndarray T_chain = np.array(T07, dtype=float, copy=True)
+    T_chain[0, 3] = T07[0, 3] - d8 * T07[0, 2]
+    T_chain[1, 3] = T07[1, 3] - d8 * T07[1, 2]
+    T_chain[2, 3] = T07[2, 3] - d8 * T07[2, 2]
     return T_chain
 
 
@@ -145,27 +174,38 @@ class ContinuityRuntimeState:
     q_lock: Optional[np.ndarray] = None
 
 
-def fk_all(q: np.ndarray, p: NeroParams) -> List[np.ndarray]:
-    Ts = [np.eye(4)]
-    T = np.eye(4)
+cpdef list fk_all(np.ndarray q, object p):
+    cdef list Ts = [np.eye(4, dtype=float)]
+    cdef np.ndarray T = np.eye(4, dtype=float)
+    cdef np.ndarray d_i = p.d_i
+    cdef np.ndarray a_prev = p.a_prev
+    cdef np.ndarray alpha_prev = p.alpha_prev
+    cdef np.ndarray theta_offset = p.theta_offset
+    cdef int i
+    cdef double theta
     for i in range(7):
-        theta = q[i] + p.theta_offset[i]
-        T = T @ _dh_A(theta, p.d_i[i], p.a_prev[i], p.alpha_prev[i])
+        theta = q[i] + theta_offset[i]
+        T = T @ _dh_A(theta, d_i[i], a_prev[i], alpha_prev[i])
         Ts.append(T.copy())
     return Ts
 
 
-def fk(q: np.ndarray, p: Optional[NeroParams] = None) -> np.ndarray:
+cpdef np.ndarray fk(np.ndarray q, object p=None):
     if p is None:
         p = NeroParams.default()
-    T = fk_all(q, p)[-1]
-    T_post = np.eye(4)
+    cdef list Ts = fk_all(q, p)
+    cdef np.ndarray T = Ts[len(Ts) - 1]
+    cdef np.ndarray T_post = np.eye(4, dtype=float)
     T_post[2, 3] = p.post_transform_d8
     return T @ T_post
 
 
-def _within_limits(q: np.ndarray, limits: np.ndarray) -> bool:
-    return bool(np.all(q >= limits[:, 0] - 1e-8) and np.all(q <= limits[:, 1] + 1e-8))
+cdef bint _within_limits(np.ndarray q, np.ndarray limits):
+    cdef int i
+    for i in range(7):
+        if q[i] < limits[i, 0] - 1e-8 or q[i] > limits[i, 1] + 1e-8:
+            return False
+    return True
 
 
 def _extract_123_from_R03_paper(R03: np.ndarray) -> List[np.ndarray]:
@@ -184,61 +224,75 @@ def _extract_123_from_R03_paper(R03: np.ndarray) -> List[np.ndarray]:
     return sols
 
 
-def _extract_567_from_T47_paper(T47: np.ndarray) -> List[np.ndarray]:
+cdef list _extract_567_from_T47_paper(np.ndarray T47):
     # MDH analytic extraction for raw wrist angles (theta5, theta6, theta7):
     # R47(2,3) = cos(theta6)
     # R47(1,3) = sin(theta6)*cos(theta5), R47(3,3)=sin(theta5)*sin(theta6)
     # R47(2,1) = -sin(theta6)*cos(theta7), R47(2,2)=sin(theta6)*sin(theta7)
-    sols = []
-    c6 = float(np.clip(T47[1, 2], -1.0, 1.0))
+    cdef list sols = []
+    cdef double c6 = T47[1, 2]
+    cdef double s6, th5, th6, th7
+    if c6 < -1.0:
+        c6 = -1.0
+    elif c6 > 1.0:
+        c6 = 1.0
+    cdef double sgn
     for sgn in (1.0, -1.0):
         s6 = sgn * math.sqrt(max(0.0, 1.0 - c6 * c6))
         if abs(s6) < 1e-8:
             continue
         th6 = math.atan2(s6, c6)
-        th5 = math.atan2(float(T47[2, 2] / s6), float(T47[0, 2] / s6))
-        th7 = math.atan2(float(T47[1, 1] / s6), float(-T47[1, 0] / s6))
+        th5 = math.atan2(T47[2, 2] / s6, T47[0, 2] / s6)
+        th7 = math.atan2(T47[1, 1] / s6, -T47[1, 0] / s6)
         sols.append(np.array([th5, th6, th7], dtype=float))
     return sols
 
 
-def _solve_q123_from_swe(
-    E: np.ndarray, W: np.ndarray, q4: float, p: NeroParams
-) -> List[np.ndarray]:
+cdef list _solve_q123_from_swe(np.ndarray E, np.ndarray W, double q4, object p):
     """
     Solve q1,q2,q3 from elbow point E and wrist center W for MDH NERO chain.
     """
-    d0 = float(p.d_i[0])
-    d2 = float(p.d_i[2])
-    d4 = float(p.d_i[4])
+    cdef double d0 = p.d_i[0]
+    cdef double d2 = p.d_i[2]
+    cdef double d4 = p.d_i[4]
+    cdef double Ex = E[0], Ey = E[1], Ez = E[2]
+    cdef double Wx = W[0], Wy = W[1], Wz = W[2]
     if abs(d2) < 1e-12 or abs(d4) < 1e-12:
         return []
 
-    Ex, Ey, Ez = float(E[0]), float(E[1]), float(E[2])
-    rho = math.hypot(Ex, Ey)
-    c2 = (Ez - d0) / d2
+    cdef double rho = math.hypot(Ex, Ey)
+    cdef double c2 = (Ez - d0) / d2
     if c2 < -1.0 - 1e-8 or c2 > 1.0 + 1e-8:
         return []
-    c2 = float(np.clip(c2, -1.0, 1.0))
-    s2_abs = math.sqrt(max(0.0, 1.0 - c2 * c2))
+    if c2 < -1.0:
+        c2 = -1.0
+    elif c2 > 1.0:
+        c2 = 1.0
+    cdef double s2_abs = math.sqrt(max(0.0, 1.0 - c2 * c2))
     if rho > abs(d2) + 1e-7:
         return []
 
-    v = W - E
-    n_v = float(np.linalg.norm(v))
+    cdef double vx = Wx - Ex, vy = Wy - Ey, vz = Wz - Ez
+    cdef double n_v = math.sqrt(vx * vx + vy * vy + vz * vz)
     if n_v < 1e-10:
         return []
-    col2 = -v / d4
-    # Normalize against numeric drift.
-    col2 = col2 / max(np.linalg.norm(col2), 1e-12)
-    u1, u2, u3 = float(col2[0]), float(col2[1]), float(col2[2])
+    cdef double u1 = -vx / d4
+    cdef double u2 = -vy / d4
+    cdef double u3 = -vz / d4
+    cdef double n_col = math.sqrt(u1 * u1 + u2 * u2 + u3 * u3)
+    if n_col < 1e-12:
+        n_col = 1e-12
+    u1 /= n_col
+    u2 /= n_col
+    u3 /= n_col
 
-    s4 = math.sin(q4)
-    c4 = math.cos(q4)
+    cdef double s4 = math.sin(q4)
+    cdef double c4 = math.cos(q4)
     if abs(s4) < 1e-8:
         return []
 
-    sols: List[np.ndarray] = []
+    cdef list sols = []
+    cdef double s2, c1, s1, n1, q1, q2, b1, b2, s3, c2c3, c3, n3
     for s2 in (s2_abs, -s2_abs):
         if abs(s2) < 1e-10:
             continue
@@ -270,25 +324,25 @@ def _solve_q123_from_swe(
     return sols
 
 
-def _solve_theta4_from_triangle(
-    S: np.ndarray, W: np.ndarray, p: NeroParams
-) -> Optional[float]:
+cdef _solve_theta4_from_triangle(np.ndarray S, np.ndarray W, object p):
     # Paper geometric triangle SEW
-    l_sw = float(np.linalg.norm(W - S))
-    l_se = abs(float(p.d_i[2]))
-    l_ew = abs(float(p.d_i[4]))
+    cdef double dx = W[0] - S[0], dy = W[1] - S[1], dz = W[2] - S[2]
+    cdef double l_sw = math.sqrt(dx * dx + dy * dy + dz * dz)
+    cdef double l_se = abs(p.d_i[2])
+    cdef double l_ew = abs(p.d_i[4])
     if l_sw < 1e-10:
         return None
-    c4 = (l_sw * l_sw - l_se * l_se - l_ew * l_ew) / (2.0 * l_se * l_ew)
+    cdef double c4 = (l_sw * l_sw - l_se * l_se - l_ew * l_ew) / (2.0 * l_se * l_ew)
     if c4 < -1.0 or c4 > 1.0:
         return None
-    c4 = float(np.clip(c4, -1.0, 1.0))
+    if c4 < -1.0:
+        c4 = -1.0
+    elif c4 > 1.0:
+        c4 = 1.0
     return math.acos(c4)
 
 
-def _compute_swe_from_target(
-    T07: np.ndarray, p: NeroParams
-) -> Tuple[np.ndarray, np.ndarray, Optional[float], np.ndarray]:
+cdef tuple _compute_swe_from_target(np.ndarray T07, object p):
     """
     Build S-W-E triangle primitives from target pose:
       - S: shoulder center
@@ -296,60 +350,84 @@ def _compute_swe_from_target(
       - q4_abs from triangle law of cosines
       - u_sw: unit vector from S to W
     """
-    R = T07[:3, :3]
-    p_target = T07[:3, 3]
-    z7 = R[:, 2]
-    d6 = float(p.d_i[6])
-    d1 = float(p.d_i[0])
+    cdef double d6 = p.d_i[6]
+    cdef double d1 = p.d_i[0]
+    cdef double d8 = p.post_transform_d8
 
-    O7 = p_target - p.post_transform_d8 * z7
-    # For this MDH chain, frame-5 origin (wrist center W) is along z7 from O7 by d6.
-    W = O7 - d6 * z7
-    S = np.array([0.0, 0.0, d1], dtype=float)
+    # z7 = R[:, 2] = third column of rotation
+    cdef double z7x = T07[0, 2], z7y = T07[1, 2], z7z = T07[2, 2]
+    # O7 = p_target - d8 * z7
+    cdef double O7x = T07[0, 3] - d8 * z7x
+    cdef double O7y = T07[1, 3] - d8 * z7y
+    cdef double O7z = T07[2, 3] - d8 * z7z
+    # W = O7 - d6 * z7
+    cdef np.ndarray W = np.array([O7x - d6 * z7x, O7y - d6 * z7y, O7z - d6 * z7z], dtype=float)
+    cdef np.ndarray S = np.array([0.0, 0.0, d1], dtype=float)
 
     q4_abs = _solve_theta4_from_triangle(S, W, p)
-    v_sw = W - S
-    n_sw = float(np.linalg.norm(v_sw))
+    cdef double vswx = W[0] - S[0], vswy = W[1] - S[1], vswz = W[2] - S[2]
+    cdef double n_sw = math.sqrt(vswx * vswx + vswy * vswy + vswz * vswz)
+    cdef np.ndarray u_sw
     if n_sw < 1e-12:
         u_sw = np.array([0.0, 0.0, 1.0], dtype=float)
     else:
-        u_sw = v_sw / n_sw
+        u_sw = np.array([vswx / n_sw, vswy / n_sw, vswz / n_sw], dtype=float)
     return S, W, q4_abs, u_sw
 
 
-def _elbow_from_arm_angle(
-    S: np.ndarray, W: np.ndarray, theta0: float, p: NeroParams
-) -> Optional[np.ndarray]:
+cdef _elbow_from_arm_angle(np.ndarray S, np.ndarray W, double theta0, object p):
     """
     Construct elbow point E(theta0) on the SEW circle.
     """
-    l_se = abs(float(p.d_i[2]))
-    l_ew = abs(float(p.d_i[4]))
-    sw = W - S
-    l_sw = float(np.linalg.norm(sw))
+    cdef double l_se = abs(p.d_i[2])
+    cdef double l_ew = abs(p.d_i[4])
+    cdef double swx = W[0] - S[0], swy = W[1] - S[1], swz = W[2] - S[2]
+    cdef double l_sw = math.sqrt(swx * swx + swy * swy + swz * swz)
     if l_sw < 1e-12:
         return None
-    u_sw = sw / l_sw
+    cdef double usx = swx / l_sw, usy = swy / l_sw, usz = swz / l_sw
 
     # Circle center on SW line and radius from triangle geometry.
-    x = (l_se * l_se - l_ew * l_ew + l_sw * l_sw) / (2.0 * l_sw)
-    r2 = l_se * l_se - x * x
+    cdef double x = (l_se * l_se - l_ew * l_ew + l_sw * l_sw) / (2.0 * l_sw)
+    cdef double r2 = l_se * l_se - x * x
     if r2 < -1e-10:
         return None
-    r = math.sqrt(max(0.0, r2))
-    C = S + x * u_sw
+    cdef double r = math.sqrt(max(0.0, r2))
+    cdef double Cx = S[0] + x * usx, Cy = S[1] + x * usy, Cz = S[2] + x * usz
 
     # Reference plane basis: use OS direction per paper-style definition.
-    os_vec = S.copy()
-    t = np.cross(os_vec, u_sw)
-    if np.linalg.norm(t) < 1e-10:
-        t = np.cross(np.array([1.0, 0.0, 0.0], dtype=float), u_sw)
-    if np.linalg.norm(t) < 1e-10:
-        t = np.cross(np.array([0.0, 1.0, 0.0], dtype=float), u_sw)
-    e1 = t / max(np.linalg.norm(t), 1e-12)
-    e2 = np.cross(u_sw, e1)
-    e2 = e2 / max(np.linalg.norm(e2), 1e-12)
-    E = C + r * (math.cos(theta0) * e1 + math.sin(theta0) * e2)
+    # t = cross(S, u_sw)
+    cdef double tx = S[1] * usz - S[2] * usy
+    cdef double ty = S[2] * usx - S[0] * usz
+    cdef double tz = S[0] * usy - S[1] * usx
+    cdef double tn = math.sqrt(tx * tx + ty * ty + tz * tz)
+    if tn < 1e-10:
+        # t = cross([1,0,0], u_sw)
+        tx = usz; ty = 0.0; tz = -usx
+        tn = math.sqrt(tx * tx + ty * ty + tz * tz)
+    if tn < 1e-10:
+        # t = cross([0,1,0], u_sw)
+        tx = -usz; ty = 0.0; tz = usx
+        tn = math.sqrt(tx * tx + ty * ty + tz * tz)
+    if tn < 1e-12:
+        tn = 1e-12
+    cdef double e1x = tx / tn, e1y = ty / tn, e1z = tz / tn
+    # e2 = cross(u_sw, e1)
+    cdef double e2x = usy * e1z - usz * e1y
+    cdef double e2y = usz * e1x - usx * e1z
+    cdef double e2z = usx * e1y - usy * e1x
+    cdef double e2n = math.sqrt(e2x * e2x + e2y * e2y + e2z * e2z)
+    if e2n < 1e-12:
+        e2n = 1e-12
+    e2x /= e2n; e2y /= e2n; e2z /= e2n
+
+    cdef double ct = math.cos(theta0)
+    cdef double st = math.sin(theta0)
+    cdef np.ndarray E = np.array([
+        Cx + r * (ct * e1x + st * e2x),
+        Cy + r * (ct * e1y + st * e2y),
+        Cz + r * (ct * e1z + st * e2z),
+    ], dtype=float)
     return E
 
 
@@ -591,9 +669,7 @@ def ik_arm_angle(
     return q_best, feasible_theta0
 
 
-def _ik_one_arm_angle(
-    T07: np.ndarray, theta0: float, p: NeroParams
-) -> List[np.ndarray]:
+cpdef list _ik_one_arm_angle(np.ndarray T07, double theta0, object p):
     # Build S-W-E geometric primitives first (paper S-R-S flow).
     S, W_from_pose, q4_abs, _ = _compute_swe_from_target(T07, p)
     E_point = _elbow_from_arm_angle(S, W_from_pose, theta0, p)
@@ -604,43 +680,46 @@ def _ik_one_arm_angle(
         return []
     W = W_from_pose
 
-    q_solutions = []
+    cdef np.ndarray theta_offset = p.theta_offset
+    cdef np.ndarray d_i = p.d_i
+    cdef np.ndarray a_prev = p.a_prev
+    cdef np.ndarray alpha_prev = p.alpha_prev
+    cdef np.ndarray joint_limits = p.joint_limits
+    cdef list q_solutions = []
+    cdef double q4, th1, th2, th3, th4, th5, th6, th7
+    cdef np.ndarray T04, T47, q, extra, theta_raw
+    cdef list q123_sols
+    cdef int i
 
     for q4 in (q4_abs, -q4_abs):
         if E_point is None:
             continue
         q123_sols = _solve_q123_from_swe(E_point, W, q4, p)
         for q123 in q123_sols:
-            q1, q2, q3 = q123.tolist()
+            th1 = q123[0] + theta_offset[0]
+            th2 = q123[1] + theta_offset[1]
+            th3 = q123[2] + theta_offset[2]
+            th4 = q4 + theta_offset[3]
 
-            # Convert original q -> raw theta used by DH transform.
-            th1 = q1 + p.theta_offset[0]
-            th2 = q2 + p.theta_offset[1]
-            th3 = q3 + p.theta_offset[2]
-            th4 = q4 + p.theta_offset[3]
-
-            T04 = np.eye(4)
-            th_raw = [th1, th2, th3, th4]
-            for i in range(4):
-                T04 = T04 @ _dh_A(th_raw[i], p.d_i[i], p.a_prev[i], p.alpha_prev[i])
+            T04 = np.eye(4, dtype=float)
+            T04 = T04 @ _dh_A(th1, d_i[0], a_prev[0], alpha_prev[0])
+            T04 = T04 @ _dh_A(th2, d_i[1], a_prev[1], alpha_prev[1])
+            T04 = T04 @ _dh_A(th3, d_i[2], a_prev[2], alpha_prev[2])
+            T04 = T04 @ _dh_A(th4, d_i[3], a_prev[3], alpha_prev[3])
             T47 = _invert_rigid_transform(T04) @ T_chain
 
             for th567 in _extract_567_from_T47_paper(T47):
-                th5, th6, th7 = th567.tolist()
+                th5 = th567[0]
+                th6 = th567[1]
+                th7 = th567[2]
                 theta_raw = np.array([th1, th2, th3, th4, th5, th6, th7], dtype=float)
-                q = wrap_to_pi(theta_raw - p.theta_offset)
-                if _within_limits(q, p.joint_limits):
-                    # Attach theta0 on the fly for logging/selection.
-                    # Append theta0 and geometric points for debug.
+                q = wrap_to_pi(theta_raw - theta_offset)
+                if _within_limits(q, joint_limits):
                     extra = np.array(
                         [
                             theta0,
-                            S[0],
-                            S[1],
-                            S[2],
-                            W[0],
-                            W[1],
-                            W[2],
+                            S[0], S[1], S[2],
+                            W[0], W[1], W[2],
                             *(
                                 E_point.tolist()
                                 if E_point is not None

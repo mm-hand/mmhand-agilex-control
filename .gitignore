@@ -4,3 +4,6 @@ build/
 install/
 log/
 .venv*/
+*.so
+*.c
+ik_solver.cpython-*.so
