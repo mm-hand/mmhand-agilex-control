@@ -8,12 +8,12 @@ from rclpy.executors import SingleThreadedExecutor
 from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import UInt8MultiArray
 
-from config import RosConfig
+from config import PoseInputConfig
 from frames import ControllerPose
 
 
-class PicoPoseSubscriber:
-    def __init__(self, config: RosConfig) -> None:
+class PoseInputSubscriber:
+    def __init__(self, config: PoseInputConfig) -> None:
         self.context = rclpy.Context()
         self.context.init()
         self.config = config
@@ -55,7 +55,7 @@ class PicoPoseSubscriber:
     def spin(self) -> None:
         self.executor.spin_once(timeout_sec=0)
 
-    def pico_connected(self, stale_s: float) -> bool:
+    def connected(self, stale_s: float) -> bool:
         return self.last_poses_at > 0.0 and time.monotonic() - self.last_poses_at < stale_s
 
     def _fresh(self, pose: ControllerPose | None) -> ControllerPose | None:

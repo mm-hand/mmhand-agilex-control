@@ -97,7 +97,7 @@ def _arm_frames(
     # ^S T_P = inv(^P T_S)  (shoulder_to_horizon, constant)
     shoulder_to_horizon = _invert_transform(horizon_to_shoulder)
 
-    # ^P T_C(t)  (horizon_to_controller, TIME-VARYING from PICO)
+    # ^P T_C(t)  (horizon_to_controller, TIME-VARYING from pose input)
     horizon_to_controller = transform_from_rotation_and_translation(
         rotation_matrix_from_quat_xyzw(pose.quat_xyzw), pose.xyz_m
     )

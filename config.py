@@ -1,15 +1,20 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
-class RosConfig:
-    node_name: str = "simple_control"
-    poses_topic: str = "/read_pico/poses"
-    tracked_topic: str = "/read_pico/tracked"
+class RuntimeConfig:
+    mode: str = "dual_sim"
+
+
+@dataclass(frozen=True)
+class PoseInputConfig:
+    node_name: str = "analytic_control"
+    poses_topic: str = "/read_pose/poses"
+    tracked_topic: str = "/read_pose/tracked"
     max_pose_age_s: float = 0.25
-    pico_disconnect_s: float = 0.5
+    disconnect_s: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -40,13 +45,61 @@ class IkConfig:
     w_acc: float = 0.25
     w_pose: float = 0.1
     w_theta0: float = 0.15
-    hysteresis_margin: float = 0.1
-    enable_global_fallback: bool = True
-    enable_qp: bool = False
-    w_qp_joint_inc: float = 1.0
-    w_qp_pose_err: float = 0.5
+    hysteresis_margin: float = 0.5
+    enable_initial_global_search: bool = True
+    enable_global_fallback: bool = False
+
+
+@dataclass(frozen=True)
+class OneEuroConfig:
+    enabled: bool = True
+    min_cutoff: float = 1.0
+    beta: float = 0.02
+    d_cutoff: float = 1.0
+
+
+@dataclass(frozen=True)
+class FilterConfig:
+    pose: OneEuroConfig = field(default_factory=lambda: OneEuroConfig(enabled=True, min_cutoff=1.2, beta=0.03, d_cutoff=1.0))
+
+
+@dataclass(frozen=True)
+class MotionConfig:
+    enabled: bool = False
+    command_hz: float = 50.0
+    blend_trigger_rad: float = 0.05
+    replan_trigger_rad: float = 0.08
+    min_replan_interval_s: float = 0.25
+    min_duration_s: float = 0.12
+    max_duration_s: float = 2.0
+    max_velocity_rad_s: tuple[float, ...] = (1.0, 1.0, 1.2, 1.2, 1.5, 1.5, 1.5)
+    max_acceleration_rad_s2: tuple[float, ...] = (2.5, 2.5, 3.0, 3.0, 4.0, 4.0, 4.0)
 
 
 @dataclass(frozen=True)
 class SimConfig:
     step_hz: float = 50.0
+    visual_z_offset_m: float = 0.6
+    show_horizon_frame: bool = True
+    horizon_frame_axis_length_m: float = 0.18
+
+
+@dataclass(frozen=True)
+class LogConfig:
+    enable_file_log: bool = True
+    directory: str = "logs"
+    filename: str = "analytic_control.log"
+    max_bytes: int = 2_000_000
+    backup_count: int = 3
+
+
+@dataclass(frozen=True)
+class ControlConfig:
+    runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
+    pose_input: PoseInputConfig = field(default_factory=PoseInputConfig)
+    frames: FrameTransformConfig = field(default_factory=FrameTransformConfig)
+    ik: IkConfig = field(default_factory=IkConfig)
+    filters: FilterConfig = field(default_factory=FilterConfig)
+    motion: MotionConfig = field(default_factory=MotionConfig)
+    sim: SimConfig = field(default_factory=SimConfig)
+    log: LogConfig = field(default_factory=LogConfig)

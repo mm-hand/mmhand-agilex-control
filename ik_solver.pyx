@@ -1,11 +1,19 @@
 # cython: boundscheck=False, wraparound=False, cdivision=True, language_level=3
+#
+# Build before running:
+#   /usr/bin/python3 setup.py build_ext --inplace
+#
+# Public runtime API used by Python code:
+#   NeroParams, ContinuityParams, ContinuityRuntimeState
+#   fk, fk_all, pose_error, solve_pose_continuous_with_state
+#
+# Do not edit generated ik_solver.c or compiled .so files; rebuild from this .pyx.
 import math
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 cimport numpy as np
-from scipy.optimize import minimize_scalar
 
 cdef double PI = math.pi
 cdef double TWO_PI = 2.0 * math.pi
@@ -177,58 +185,6 @@ cdef inline np.ndarray _rotx(double t):
     return np.array([[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]], dtype=float)
 
 
-cdef np.ndarray _dh_A(double theta, double d, double a_prev, double alpha_prev):
-    # NOTE: YAIK/NERO uses Modified DH:
-    # T_i^{i-1} = RotX(alpha_{i-1}) * TransX(a_{i-1}) * RotZ(theta_i) * TransZ(d_i)
-    cdef double ca = math.cos(alpha_prev)
-    cdef double sa = math.sin(alpha_prev)
-    cdef double ct = math.cos(theta)
-    cdef double st = math.sin(theta)
-    cdef np.ndarray T = np.eye(4, dtype=float)
-    # T[:3, :3] = RotX(alpha) @ RotZ(theta)
-    T[0, 0] = ct;        T[0, 1] = -st;       T[0, 2] = 0.0
-    T[1, 0] = ca * st;   T[1, 1] = ca * ct;   T[1, 2] = -sa
-    T[2, 0] = sa * st;   T[2, 1] = sa * ct;   T[2, 2] = ca
-    T[0, 3] = a_prev
-    T[1, 3] = -sa * d
-    T[2, 3] = ca * d
-    return T
-
-
-cdef np.ndarray _invert_rigid_transform(np.ndarray T):
-    cdef np.ndarray out = np.eye(4, dtype=float)
-    # out[:3, :3] = T[:3, :3].T
-    out[0, 0] = T[0, 0]; out[0, 1] = T[1, 0]; out[0, 2] = T[2, 0]
-    out[1, 0] = T[0, 1]; out[1, 1] = T[1, 1]; out[1, 2] = T[2, 1]
-    out[2, 0] = T[0, 2]; out[2, 1] = T[1, 2]; out[2, 2] = T[2, 2]
-    # out[:3, 3] = -(Rt @ t)
-    out[0, 3] = -(out[0, 0] * T[0, 3] + out[0, 1] * T[1, 3] + out[0, 2] * T[2, 3])
-    out[1, 3] = -(out[1, 0] * T[0, 3] + out[1, 1] * T[1, 3] + out[1, 2] * T[2, 3])
-    out[2, 3] = -(out[2, 0] * T[0, 3] + out[2, 1] * T[1, 3] + out[2, 2] * T[2, 3])
-    return out
-
-
-cdef np.ndarray _remove_post_transform(np.ndarray T07, object p):
-    """
-    Equivalent to T07 @ inv(T_post) where T_post = TransZ(post_transform_d8),
-    but avoids building/inverting a matrix each call.
-    """
-    cdef double d8 = p.post_transform_d8
-    cdef np.ndarray T_chain = np.array(T07, dtype=float, copy=True)
-    T_chain[0, 3] = T07[0, 3] - d8 * T07[0, 2]
-    T_chain[1, 3] = T07[1, 3] - d8 * T07[1, 2]
-    T_chain[2, 3] = T07[2, 3] - d8 * T07[2, 2]
-    return T_chain
-
-
-def _axis_angle_rot(axis: np.ndarray, angle: float) -> np.ndarray:
-    u = axis / max(np.linalg.norm(axis), 1e-12)
-    ux, uy, uz = u
-    K = np.array([[0.0, -uz, uy], [uz, 0.0, -ux], [-uy, ux, 0.0]], dtype=float)
-    I = np.eye(3)
-    return I + math.sin(angle) * K + (1.0 - math.cos(angle)) * (K @ K)
-
-
 @dataclass
 class NeroParams:
     # Keep this exactly as paper-style DH used for NERO experiments here.
@@ -284,12 +240,9 @@ class ContinuityParams:
     w_theta0: float = 0.15
     # Hysteresis: keep locked branch unless significantly better candidate appears.
     hysteresis_margin: float = 0.03
-    # Fallback to global scan when local window fails.
+    # Initial global scan acquires the first branch; fallback controls later reacquire.
+    enable_initial_global_search: bool = True
     enable_global_fallback: bool = True
-    # 1D QP精修
-    enable_qp: bool = True
-    w_qp_joint_inc: float = 1.0  # 关节增量权重
-    w_qp_pose_err: float = 0.5  # 位姿误差权重
 
 
 @dataclass
@@ -343,14 +296,6 @@ cpdef np.ndarray fk(np.ndarray q, object p=None):
     cdef np.ndarray result = np.empty((4, 4), dtype=float)
     _c_to_np4(Tc, result)
     return result
-
-
-cdef bint _within_limits(np.ndarray q, np.ndarray limits):
-    cdef int i
-    for i in range(7):
-        if q[i] < limits[i, 0] - 1e-8 or q[i] > limits[i, 1] + 1e-8:
-            return False
-    return True
 
 
 cdef list _solve_q123_c(double Ex, double Ey, double Ez,
@@ -429,123 +374,6 @@ cdef list _extract_567_c(double* T47):
     return sols
 
 
-def _extract_123_from_R03_paper(R03: np.ndarray) -> List[np.ndarray]:
-    # From paper eq.(21)-style extraction:
-    # theta2 = +/- acos(R33), theta1 = atan2(-R23/s2, -R13/s2), theta3 = atan2(-R32/s2, R31/s2)
-    sols = []
-    c2 = float(np.clip(R03[2, 2], -1.0, 1.0))
-    for sgn in (1.0, -1.0):
-        s2 = sgn * math.sqrt(max(0.0, 1.0 - c2 * c2))
-        if abs(s2) < 1e-8:
-            continue
-        th2 = math.atan2(s2, c2)
-        th1 = math.atan2(float(-R03[1, 2] / s2), float(-R03[0, 2] / s2))
-        th3 = math.atan2(float(-R03[2, 1] / s2), float(R03[2, 0] / s2))
-        sols.append(np.array([th1, th2, th3], dtype=float))
-    return sols
-
-
-cdef list _extract_567_from_T47_paper(np.ndarray T47):
-    # MDH analytic extraction for raw wrist angles (theta5, theta6, theta7):
-    # R47(2,3) = cos(theta6)
-    # R47(1,3) = sin(theta6)*cos(theta5), R47(3,3)=sin(theta5)*sin(theta6)
-    # R47(2,1) = -sin(theta6)*cos(theta7), R47(2,2)=sin(theta6)*sin(theta7)
-    cdef list sols = []
-    cdef double c6 = T47[1, 2]
-    cdef double s6, th5, th6, th7
-    if c6 < -1.0:
-        c6 = -1.0
-    elif c6 > 1.0:
-        c6 = 1.0
-    cdef double sgn
-    for sgn in (1.0, -1.0):
-        s6 = sgn * math.sqrt(max(0.0, 1.0 - c6 * c6))
-        # 腕部奇异保护: 钳制到小值而非跳过 (同 _extract_567_c)
-        if abs(s6) < 1e-4:
-            s6 = sgn * 1e-4
-        th6 = math.atan2(s6, c6)
-        th5 = math.atan2(T47[2, 2] / s6, T47[0, 2] / s6)
-        th7 = math.atan2(T47[1, 1] / s6, -T47[1, 0] / s6)
-        sols.append(np.array([th5, th6, th7], dtype=float))
-    return sols
-
-
-cdef list _solve_q123_from_swe(np.ndarray E, np.ndarray W, double q4, object p):
-    """
-    Solve q1,q2,q3 from elbow point E and wrist center W for MDH NERO chain.
-    """
-    cdef double d0 = p.d_i[0]
-    cdef double d2 = p.d_i[2]
-    cdef double d4 = p.d_i[4]
-    cdef double Ex = E[0], Ey = E[1], Ez = E[2]
-    cdef double Wx = W[0], Wy = W[1], Wz = W[2]
-    if abs(d2) < 1e-12 or abs(d4) < 1e-12:
-        return []
-
-    cdef double rho = math.hypot(Ex, Ey)
-    cdef double c2 = (Ez - d0) / d2
-    if c2 < -1.0 - 1e-8 or c2 > 1.0 + 1e-8:
-        return []
-    if c2 < -1.0:
-        c2 = -1.0
-    elif c2 > 1.0:
-        c2 = 1.0
-    cdef double s2_abs = math.sqrt(max(0.0, 1.0 - c2 * c2))
-    if rho > abs(d2) + 1e-7:
-        return []
-
-    cdef double vx = Wx - Ex, vy = Wy - Ey, vz = Wz - Ez
-    cdef double n_v = math.sqrt(vx * vx + vy * vy + vz * vz)
-    if n_v < 1e-10:
-        return []
-    cdef double u1 = -vx / d4
-    cdef double u2 = -vy / d4
-    cdef double u3 = -vz / d4
-    cdef double n_col = math.sqrt(u1 * u1 + u2 * u2 + u3 * u3)
-    if n_col < 1e-12:
-        n_col = 1e-12
-    u1 /= n_col
-    u2 /= n_col
-    u3 /= n_col
-
-    cdef double s4 = math.sin(q4)
-    cdef double c4 = math.cos(q4)
-    if abs(s4) < 1e-8:
-        return []
-
-    cdef list sols = []
-    cdef double s2, c1, s1, n1, q1, q2, b1, b2, s3, c2c3, c3, n3
-    for s2 in (s2_abs, -s2_abs):
-        if abs(s2) < 1e-10:
-            continue
-        c1 = -Ex / (d2 * s2)
-        s1 = -Ey / (d2 * s2)
-        n1 = math.hypot(c1, s1)
-        if n1 < 1e-12:
-            continue
-        c1 /= n1
-        s1 /= n1
-        q1 = math.atan2(s1, c1)
-        q2 = math.atan2(s2, c2)
-
-        b1 = (s2 * c1 * c4 - u1) / s4
-        b2 = (u2 - s1 * s2 * c4) / s4
-        s3 = s1 * b1 + c1 * b2
-        c2c3 = -c1 * b1 + s1 * b2
-        if abs(c2) > 1e-8:
-            c3 = c2c3 / c2
-        else:
-            c3 = (u3 + c2 * c4) / (s2 * s4)
-        n3 = math.hypot(s3, c3)
-        if n3 < 1e-12:
-            continue
-        s3 /= n3
-        c3 /= n3
-        q3 = math.atan2(s3, c3)
-        sols.append(np.array([q1, q2, q3], dtype=float))
-    return sols
-
-
 cdef _solve_theta4_from_triangle(np.ndarray S, np.ndarray W, object p):
     # Paper geometric triangle SEW
     cdef double dx = W[0] - S[0], dy = W[1] - S[1], dz = W[2] - S[2]
@@ -597,62 +425,6 @@ cdef tuple _compute_swe_from_target(np.ndarray T07, object p):
     return S, W, q4_abs, u_sw
 
 
-cdef _elbow_from_arm_angle(np.ndarray S, np.ndarray W, double theta0, object p):
-    """
-    Construct elbow point E(theta0) on the SEW circle.
-    """
-    cdef double l_se = abs(p.d_i[2])
-    cdef double l_ew = abs(p.d_i[4])
-    cdef double swx = W[0] - S[0], swy = W[1] - S[1], swz = W[2] - S[2]
-    cdef double l_sw = math.sqrt(swx * swx + swy * swy + swz * swz)
-    if l_sw < 1e-12:
-        return None
-    cdef double usx = swx / l_sw, usy = swy / l_sw, usz = swz / l_sw
-
-    # Circle center on SW line and radius from triangle geometry.
-    cdef double x = (l_se * l_se - l_ew * l_ew + l_sw * l_sw) / (2.0 * l_sw)
-    cdef double r2 = l_se * l_se - x * x
-    if r2 < -1e-10:
-        return None
-    cdef double r = math.sqrt(max(0.0, r2))
-    cdef double Cx = S[0] + x * usx, Cy = S[1] + x * usy, Cz = S[2] + x * usz
-
-    # Reference plane basis: use OS direction per paper-style definition.
-    # t = cross(S, u_sw)
-    cdef double tx = S[1] * usz - S[2] * usy
-    cdef double ty = S[2] * usx - S[0] * usz
-    cdef double tz = S[0] * usy - S[1] * usx
-    cdef double tn = math.sqrt(tx * tx + ty * ty + tz * tz)
-    if tn < 1e-10:
-        # t = cross([1,0,0], u_sw)
-        tx = usz; ty = 0.0; tz = -usx
-        tn = math.sqrt(tx * tx + ty * ty + tz * tz)
-    if tn < 1e-10:
-        # t = cross([0,1,0], u_sw)
-        tx = -usz; ty = 0.0; tz = usx
-        tn = math.sqrt(tx * tx + ty * ty + tz * tz)
-    if tn < 1e-12:
-        tn = 1e-12
-    cdef double e1x = tx / tn, e1y = ty / tn, e1z = tz / tn
-    # e2 = cross(u_sw, e1)
-    cdef double e2x = usy * e1z - usz * e1y
-    cdef double e2y = usz * e1x - usx * e1z
-    cdef double e2z = usx * e1y - usy * e1x
-    cdef double e2n = math.sqrt(e2x * e2x + e2y * e2y + e2z * e2z)
-    if e2n < 1e-12:
-        e2n = 1e-12
-    e2x /= e2n; e2y /= e2n; e2z /= e2n
-
-    cdef double ct = math.cos(theta0)
-    cdef double st = math.sin(theta0)
-    cdef np.ndarray E = np.array([
-        Cx + r * (ct * e1x + st * e2x),
-        Cy + r * (ct * e1y + st * e2y),
-        Cz + r * (ct * e1z + st * e2z),
-    ], dtype=float)
-    return E
-
-
 def _weight_limits(q: float, q_min: float, q_max: float) -> float:
     """清华论文式(20)：越靠近限位，权重越大。"""
     span = q_max - q_min
@@ -674,43 +446,6 @@ def _weight_limits(q: float, q_min: float, q_max: float) -> float:
     if abs(den) < 1e-12:
         return 1e6
     return -b * x / den
-
-
-def _get_theta0_feasible_region(
-    T07: np.ndarray, p: NeroParams, step: float = 0.01
-) -> List[float]:
-    """
-    臂角可行域：在 [-pi, pi) 上离散扫描，若该臂角下存在在限位内的解析解则计入。
-    使用 `_ik_one_arm_angle`（与原文一致的几何分支），等价于文档中“用解析关节角判断限位”。
-    """
-    feasible: List[float] = []
-    for theta0 in np.arange(-math.pi, math.pi, step):
-        t = float(theta0)
-        if _ik_one_arm_angle(T07, t, p):
-            feasible.append(t)
-    return feasible
-
-
-def _optimal_theta0(
-    feasible_theta0: List[float], T07: np.ndarray, p: NeroParams, q_prev: np.ndarray
-) -> float:
-    """在可行臂角集合上，按加权关节增量平方和最小选最优臂角（论文 4.1 风格）。"""
-    best_cost = float("inf")
-    best_t = feasible_theta0[0]
-    for t in feasible_theta0:
-        sols = _ik_one_arm_angle(T07, float(t), p)
-        for q_full in sols:
-            q = q_full[:7]
-            cost = 0.0
-            for i in range(7):
-                lo, hi = float(p.joint_limits[i, 0]), float(p.joint_limits[i, 1])
-                w = _weight_limits(q[i], lo, hi)
-                dq = abs(q[i] - q_prev[i])
-                cost += w * dq * dq
-            if cost < best_cost:
-                best_cost = cost
-                best_t = float(t)
-    return best_t
 
 
 def _scan_theta0_solutions(
@@ -758,137 +493,6 @@ def _best_weighted_from_cached(
                 q_best_full = q_full
                 theta0_best = t
     return q_best, q_best_full, theta0_best
-
-
-def _best_q_at_theta0_weighted(
-    theta0: float, T07: np.ndarray, p: NeroParams, q_prev: np.ndarray
-) -> Optional[np.ndarray]:
-    """同一臂角下多分支时，取加权代价最小的 7 维关节向量。"""
-    sols = _ik_one_arm_angle(T07, float(theta0), p)
-    best_cost = float("inf")
-    best_q: Optional[np.ndarray] = None
-    for q_full in sols:
-        q = q_full[:7]
-        cost = 0.0
-        for i in range(7):
-            lo, hi = float(p.joint_limits[i, 0]), float(p.joint_limits[i, 1])
-            w = _weight_limits(q[i], lo, hi)
-            dq = abs(q[i] - q_prev[i])
-            cost += w * dq * dq
-        if cost < best_cost:
-            best_cost = cost
-            best_q = q.copy()
-    return best_q
-
-
-def _qp_1d_objective(
-    dq: float,
-    idx: int,
-    q_base: np.ndarray,
-    T_target: np.ndarray,
-    p: NeroParams,
-    continuity: ContinuityParams,
-) -> float:
-    """
-    1D QP目标函数：最小化关节增量 + 位姿误差
-    :param dq: 单个关节的增量（优化变量）
-    :param idx: 待优化的关节索引
-    :param q_base: 解析解得到的基础关节角
-    :param T_target: 目标位姿
-    :param p: 机器人DH参数
-    :param continuity: 权重参数
-    :return: 目标函数值
-    """
-    # 构造新的关节角
-    q_new = q_base.copy()
-    q_new[idx] = wrap_to_pi(q_new[idx] + dq)
-
-    # 1. 关节限位惩罚（硬约束通过优化边界实现，这里加软惩罚）
-    q_min, q_max = p.joint_limits[idx]
-    if q_new[idx] < q_min or q_new[idx] > q_max:
-        limit_penalty = 1e6 * abs(q_new[idx] - np.clip(q_new[idx], q_min, q_max))
-    else:
-        limit_penalty = 0.0
-
-    # 2. 关节增量代价
-    inc_cost = continuity.w_qp_joint_inc * (dq**2)
-
-    # 3. 位姿误差代价
-    T_cur = fk(q_new, p)
-    pose_err = _pose_error_norm(T_cur, T_target)
-    pose_cost = continuity.w_qp_pose_err * (pose_err**2)
-
-    return inc_cost + pose_cost + limit_penalty
-
-
-def _optimize_q_with_1d_qp(
-    q_init: np.ndarray,
-    T_target: np.ndarray,
-    p: NeroParams,
-    continuity: ContinuityParams,
-) -> np.ndarray:
-    """
-    对解析解进行1D QP优化（逐关节优化）
-    :param q_init: 解析解初始关节角
-    :param T_target: 目标位姿
-    :param p: 机器人DH参数
-    :param continuity: 权重参数
-    :return: 优化后的关节角
-    """
-    q_opt = q_init.copy()
-    for idx in range(7):
-        # 关节限位作为优化边界
-        q_min, q_max = p.joint_limits[idx]
-        # 计算当前关节角与限位的距离，限制优化范围
-        delta_max = min(0.1, q_max - q_opt[idx])  # 最大正增量（0.1弧度约5.7度）
-        delta_min = max(-0.1, q_min - q_opt[idx])  # 最大负增量
-
-        # 1D最小化优化
-        res = minimize_scalar(
-            _qp_1d_objective,
-            bounds=(delta_min, delta_max),
-            args=(idx, q_opt, T_target, p, continuity),
-            method="bounded",
-        )
-
-        # 更新关节角（仅当优化成功时）
-        if res.success:
-            q_opt[idx] = wrap_to_pi(q_opt[idx] + res.x)
-
-    return q_opt
-
-
-def ik_arm_angle(
-    T07: np.ndarray,
-    p: Optional[NeroParams] = None,
-    q_prev: Optional[np.ndarray] = None,
-    n_psi: int = 181,
-) -> Tuple[Optional[np.ndarray], List[float]]:
-    """
-    主流程：S,W → 臂角可行域 → 最优臂角 → 加权选支路 → 1D QP优化。
-    `n_psi` 用于将步长限制为 `min(0.01, 2*pi/max(n_psi,1))`，与原文网格密度参数对齐。
-    """
-    if p is None:
-        p = NeroParams.default()
-    T = np.array(T07, dtype=float)
-    _, _, q4_abs, _ = _compute_swe_from_target(T, p)
-    if q4_abs is None:
-        return None, []
-    if q_prev is None:
-        q_prev = np.zeros(7, dtype=float)
-    step = min(0.01, 2.0 * math.pi / max(1, n_psi))
-    feasible_theta0 = _get_theta0_feasible_region(T, p, step=step)
-    if len(feasible_theta0) == 0:
-        return None, feasible_theta0
-    best_t0 = _optimal_theta0(feasible_theta0, T, p, q_prev)
-    q_best = _best_q_at_theta0_weighted(best_t0, T, p, q_prev)
-
-    # 新增：1D QP优化
-    if q_best is not None:
-        continuity = ContinuityParams()  # 使用默认QP权重
-        q_best = _optimize_q_with_1d_qp(q_best, T, p, continuity)
-
-    return q_best, feasible_theta0
 
 
 cpdef list _ik_one_arm_angle(np.ndarray T07_np, double theta0, object p):
@@ -1007,24 +611,6 @@ cpdef list _ik_one_arm_angle(np.ndarray T07_np, double theta0, object p):
     return q_solutions
 
 
-def _q_from_theta0(
-    theta0: float, T07: np.ndarray, p: NeroParams
-) -> Optional[np.ndarray]:
-    """
-    文档「关节角 → 臂角」逆映射的单支路表示：给定 theta0 取一条在限位内的解析解（7 维）。
-    论文中的显式三角式针对特定 DH；本工程统一用 `_ik_one_arm_angle` 的 MDH 几何结果以保证与 FK 一致。
-    """
-    sols = _ik_one_arm_angle(T07, float(theta0), p)
-    if not sols:
-        return None
-    return sols[0][:7].copy()
-
-
-def _theta0_candidates_from_target(T: np.ndarray, n_psi: int) -> np.ndarray:
-    # Paper-style arm-angle parameter full sweep in (-pi, pi]
-    return np.linspace(-math.pi, math.pi, max(31, n_psi), endpoint=True)
-
-
 def _collect_unique_solutions_for_theta0_grid(
     T: np.ndarray, p: NeroParams, theta0_grid: np.ndarray
 ) -> List[np.ndarray]:
@@ -1074,11 +660,6 @@ def ik_arm_angle_with_report(
         )
 
     q_best, q_best_full, best_t0 = _best_weighted_from_cached(cached, p, q_prev)
-
-    # 新增：1D QP优化
-    if q_best is not None:
-        continuity = ContinuityParams()
-        q_best = _optimize_q_with_1d_qp(q_best, T, p, continuity)
 
     if q_best is None:
         return (
@@ -1132,7 +713,7 @@ def ik_arm_angle_with_report(
         q_best,
         all_solutions,
         {
-            "method": "feasible_region+1DQP",
+            "method": "feasible_region",
             "candidate_count": len(feasible_theta0),
             "pose_err_best": e_best,
             "theta0_selected": theta0_best,
@@ -1140,90 +721,6 @@ def ik_arm_angle_with_report(
             "swe_debug": swe_debug,
         },
     )
-
-
-def ik_arm_angle_simple(
-    T_target: np.ndarray,
-    p: Optional[NeroParams] = None,
-    q_prev: Optional[np.ndarray] = None,
-    n_psi: int = 181,
-) -> Tuple[Optional[np.ndarray], List[np.ndarray]]:
-    q_best, all_solutions_full, _ = ik_arm_angle_with_report(
-        T_target, p=p, q_prev=q_prev, n_psi=n_psi
-    )
-    return q_best, [q[:7] for q in all_solutions_full]
-
-
-def solve_trajectory(
-    T_targets: List[np.ndarray],
-    p: Optional[NeroParams] = None,
-    q_init: Optional[np.ndarray] = None,
-    n_psi: int = 181,
-) -> Tuple[List[Optional[np.ndarray]], List[Dict[str, object]]]:
-    """
-    Sequential analytic IK for a pose list.
-    Uses previous successful joint result as continuity prior.
-    """
-    if p is None:
-        p = NeroParams.default()
-    if q_init is None:
-        q_prev = np.zeros(7, dtype=float)
-    else:
-        q_prev = np.array(q_init, dtype=float).reshape(7)
-
-    q_list: List[Optional[np.ndarray]] = []
-    reports: List[Dict[str, object]] = []
-    for T in T_targets:
-        q, _, report = ik_arm_angle_with_report(
-            np.array(T, dtype=float), p=p, q_prev=q_prev, n_psi=n_psi
-        )
-        q_list.append(q)
-        reports.append(report)
-        if q is not None:
-            q_prev = q
-    return q_list, reports
-
-
-def solve_trajectory_continuous(
-    T_targets: List[np.ndarray],
-    p: Optional[NeroParams] = None,
-    q_init: Optional[np.ndarray] = None,
-    n_psi: int = 181,
-    continuity: Optional[ContinuityParams] = None,
-) -> Tuple[List[Optional[np.ndarray]], List[Dict[str, object]]]:
-    """
-    Enhanced trajectory IK:
-      1) local theta0 tracking around previous theta0
-      2) continuity-aware branch scoring (velocity + acceleration + pose + theta0 change)
-      3) branch hysteresis to suppress sudden switches
-      4) 1D QP post-optimization for each step
-    Old solve_trajectory is kept unchanged.
-    """
-    if p is None:
-        p = NeroParams.default()
-    if continuity is None:
-        continuity = ContinuityParams()
-    if q_init is None:
-        q_prev = np.zeros(7, dtype=float)
-    else:
-        q_prev = np.array(q_init, dtype=float).reshape(7)
-    state = ContinuityRuntimeState(q_prev=q_prev)
-
-    q_list: List[Optional[np.ndarray]] = []
-    reports: List[Dict[str, object]] = []
-
-    for T_raw in T_targets:
-        q_best, report, state = solve_pose_continuous_with_state(
-            np.array(T_raw, dtype=float),
-            state=state,
-            p=p,
-            n_psi=n_psi,
-            continuity=continuity,
-        )
-        q_list.append(q_best)
-        reports.append(report)
-
-    return q_list, reports
 
 
 def solve_pose_continuous_with_state(
@@ -1236,7 +733,6 @@ def solve_pose_continuous_with_state(
     """
     Single-step continuous IK with external runtime state.
     This is equivalent to one iteration of solve_trajectory_continuous.
-    新增：1D QP优化
     """
     if p is None:
         p = NeroParams.default()
@@ -1260,7 +756,9 @@ def solve_pose_continuous_with_state(
         )
         all_solutions = _collect_unique_solutions_for_theta0_grid(T, p, theta0_grid)
 
-    if not all_solutions and continuity.enable_global_fallback:
+    allow_global = (theta0_prev is None and continuity.enable_initial_global_search) or (theta0_prev is not None and continuity.enable_global_fallback)
+
+    if not all_solutions and allow_global:
         q_global, all_full, _ = ik_arm_angle_with_report(
             T, p=p, q_prev=q_prev, n_psi=n_psi
         )
@@ -1328,10 +826,6 @@ def solve_pose_continuous_with_state(
     q_best = q_best_full[:7]
     theta0_best = float(q_best_full[7]) if q_best_full.shape[0] > 7 else None
 
-    # 1D QP优化
-    if continuity.enable_qp:
-        q_best = _optimize_q_with_1d_qp(q_best, T, p, continuity)
-
     pose_best = _pose_error_norm(fk(q_best, p), T)
 
     next_state = ContinuityRuntimeState(
@@ -1341,7 +835,7 @@ def solve_pose_continuous_with_state(
         q_lock=q_best,
     )
     report = {
-        "method": f"{method}+1DQP",
+        "method": method,
         "candidate_count": len(all_solutions),
         "selected_by": selected_by,
         "score_best": float(selected[0]),

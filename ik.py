@@ -62,10 +62,8 @@ class NeroIK:
             w_pose=ik_config.w_pose,
             w_theta0=ik_config.w_theta0,
             hysteresis_margin=ik_config.hysteresis_margin,
+            enable_initial_global_search=ik_config.enable_initial_global_search,
             enable_global_fallback=ik_config.enable_global_fallback,
-            enable_qp=ik_config.enable_qp,
-            w_qp_joint_inc=ik_config.w_qp_joint_inc,
-            w_qp_pose_err=ik_config.w_qp_pose_err,
         )
         self._state = ContinuityRuntimeState(q_prev=self.robot.q.copy())
 

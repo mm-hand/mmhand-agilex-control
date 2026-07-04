@@ -1,24 +1,24 @@
 from __future__ import annotations
 
+import logging
 import time
 
 import numpy as np
 from spatialmath import SE3
 from spatialgeometry import Axes
 
-from config import FrameTransformConfig, IkConfig, RosConfig, SimConfig
-from frames import arm_base_in_horizon, build_coordinate_frames
-from ik import NeroIK
-from ros_io import PicoPoseSubscriber
+from config import SimConfig
+from frames import ArmBases, CoordinateFrames
 
-# Swift world is Z-up; PICO horizon is Y-up.
+# Swift world is Z-up; input horizon is Y-up.
 # Swift_X = hX, Swift_Y = -hZ, Swift_Z = hY.
 _SWIFT_FROM_HORIZON = np.eye(4)
 _SWIFT_FROM_HORIZON[:3, :3] = np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]])
 
 
-def _swift_se3(transform_horizon: np.ndarray) -> SE3:
+def swift_se3(transform_horizon: np.ndarray, z_offset_m: float = 0.0) -> SE3:
     transform = _SWIFT_FROM_HORIZON @ transform_horizon
+    transform[:3, 3] += np.array([0.0, 0.0, z_offset_m])
     return SE3.Rt(transform[:3, :3], transform[:3, 3])
 
 
@@ -86,10 +86,8 @@ def _patch_swift_reconnect_leak():
                 except Empty:
                     await asyncio.sleep(0.02)
                     continue
-                expected = message[0]
-                msg = message[1]
-                await websocket.send(json.dumps(msg))
-                await self.expect_message(websocket, expected)
+                await websocket.send(json.dumps(message[1]))
+                await self.expect_message(websocket, message[0])
         finally:
             if state["epoch"] == my_epoch:
                 state["connected"] = False
@@ -98,8 +96,7 @@ def _patch_swift_reconnect_leak():
     def _send_socket(self, code, data=None, expected=True):
         if not state["connected"]:
             return "{}" if code == "shape_poses" else "0"
-        msg = [expected, [code, data]]
-        self.outq.put(msg)
+        self.outq.put([expected, [code, data]])
         if expected:
             try:
                 return self.inq.get(timeout=1.0)
@@ -166,116 +163,78 @@ def _reemit_scene(env, items, is_connected) -> None:
             env._send_socket("element", ob.to_dict())
 
 
-def run_sim(
-    ros_cfg: RosConfig,
-    frame_cfg: FrameTransformConfig,
-    ik_cfg: IkConfig,
-    sim_cfg: SimConfig,
-) -> int:
-    from swift import Swift
-    from swift.SwiftElement import Label
+class SwiftSimBackend:
+    def __init__(self, left_robot, right_robot, bases: ArmBases, sim_config: SimConfig, logger: logging.Logger) -> None:
+        from swift import Swift
+        from swift.SwiftElement import Label
 
-    browser_reconnected, drain_queues, is_connected = _patch_swift_reconnect_leak()
+        self.logger = logger
+        self.z_offset_m = sim_config.visual_z_offset_m
+        self.browser_reconnected, self.drain_queues, self.is_connected = _patch_swift_reconnect_leak()
 
-    sub = PicoPoseSubscriber(ros_cfg)
-    left_ik = NeroIK(ik_cfg)
-    right_ik = NeroIK(ik_cfg)
+        self.left_robot = left_robot
+        self.right_robot = right_robot
+        self.left_robot.base = swift_se3(bases.left, self.z_offset_m)
+        self.right_robot.base = swift_se3(bases.right, self.z_offset_m)
 
-    bases = arm_base_in_horizon(frame_cfg)
-    left_ik.robot.base = _swift_se3(bases.left)
-    right_ik.robot.base = _swift_se3(bases.right)
+        self.left_input, self.right_input, self.left_flange, self.right_flange, self.left_base, self.right_base = (
+            Axes(0.05) for _ in range(6)
+        )
+        self.horizon_frame = Axes(sim_config.horizon_frame_axis_length_m) if sim_config.show_horizon_frame else None
+        self.left_base.T = swift_se3(bases.left, self.z_offset_m).A
+        self.right_base.T = swift_se3(bases.right, self.z_offset_m).A
+        if self.horizon_frame is not None:
+            self.horizon_frame.T = swift_se3(np.eye(4), self.z_offset_m).A
+        self.status_label = Label("pose input: starting...")
 
-    left_controller, right_controller, left_flange, right_flange, left_base, right_base = (
-        Axes(0.05) for _ in range(6)
-    )
-    left_base.T = _swift_se3(bases.left).A
-    right_base.T = _swift_se3(bases.right).A
+        self.items = (
+            self.left_robot,
+            self.right_robot,
+            self.left_input,
+            self.right_input,
+            self.left_flange,
+            self.right_flange,
+            self.left_base,
+            self.right_base,
+            *(() if self.horizon_frame is None else (self.horizon_frame,)),
+            self.status_label,
+        )
 
-    status_label = Label("PICO: starting...")
+        self.env = Swift()
+        self.env.launch(realtime=True)
+        for item in self.items:
+            self.env.add(item)
+        self.logger.info("swift ready")
 
-    items = (
-        left_ik.robot,
-        right_ik.robot,
-        left_controller,
-        right_controller,
-        left_flange,
-        right_flange,
-        left_base,
-        right_base,
-        status_label,
-    )
+    def update(
+        self,
+        left_q: np.ndarray | None,
+        right_q: np.ndarray | None,
+        frames: CoordinateFrames,
+        status: str,
+        dt: float,
+    ) -> None:
+        if left_q is not None:
+            self.left_robot.q = left_q
+        if right_q is not None:
+            self.right_robot.q = right_q
 
-    env = Swift()
-    env.launch(realtime=True)
-    for item in items:
-        env.add(item)
-    print("swift ready", flush=True)
+        if frames.left is not None:
+            self.left_input.T = swift_se3(frames.left.transform_horizon_to_controller, self.z_offset_m).A
+            self.left_flange.T = swift_se3(frames.left.transform_horizon_to_flange, self.z_offset_m).A
+        if frames.right is not None:
+            self.right_input.T = swift_se3(frames.right.transform_horizon_to_controller, self.z_offset_m).A
+            self.right_flange.T = swift_se3(frames.right.transform_horizon_to_flange, self.z_offset_m).A
 
-    dt = 1.0 / sim_cfg.step_hz
-    n = 0
-    last_status = ""
-    pico_stale_s = ros_cfg.pico_disconnect_s
-    # IK hold print rate limit: at most once per second per arm.
-    last_hold_print = [0.0, 0.0]  # [left, right]
-    try:
-        while True:
-            sub.spin()
-            frames = build_coordinate_frames(sub.get_left(), sub.get_right(), frame_cfg)
+        if self.browser_reconnected():
+            self.drain_queues(self.env)
+            _reemit_scene(self.env, self.items, self.is_connected)
 
-            if frames.left is not None:
-                q = left_ik.solve(frames.left.transform_arm_base_to_flange)
-                if q is not None:
-                    left_ik.robot.q = q
-                else:
-                    now = time.monotonic()
-                    if now - last_hold_print[0] > 1.0:
-                        print("[IK] L hold", flush=True)
-                        last_hold_print[0] = now
-                left_controller.T = _swift_se3(frames.left.transform_horizon_to_controller).A
-                left_flange.T = _swift_se3(frames.left.transform_horizon_to_flange).A
+        self.status_label.desc = status
+        self.env.step(dt)
 
-            if frames.right is not None:
-                q = right_ik.solve(frames.right.transform_arm_base_to_flange)
-                if q is not None:
-                    right_ik.robot.q = q
-                else:
-                    now = time.monotonic()
-                    if now - last_hold_print[1] > 1.0:
-                        print("[IK] R hold", flush=True)
-                        last_hold_print[1] = now
-                right_controller.T = _swift_se3(frames.right.transform_horizon_to_controller).A
-                right_flange.T = _swift_se3(frames.right.transform_horizon_to_flange).A
-
-            if browser_reconnected():
-                drain_queues(env)
-                _reemit_scene(env, items, is_connected)
-
-            pico_ok = sub.pico_connected(pico_stale_s)
-            tracked = sub.tracked
-            if not pico_ok:
-                status = "PICO: disconnected (waiting...)"
-            else:
-                lt = "ok" if tracked[0] == 1 else "lost"
-                rt = "ok" if tracked[1] == 1 else "lost"
-                status = f"PICO: connected | L {lt} | R {rt}"
-            if status != last_status:
-                status_label.desc = status
-                last_status = status
-
-            n += 1
-            if n % 50 == 0 and frames.left is not None:
-                ctrl = frames.left.transform_horizon_to_controller[:3, 3]
-                flange = frames.left.transform_horizon_to_flange[:3, 3]
-                print(f"[L] h ctrl={np.round(ctrl, 4)} flange={np.round(flange, 4)}", flush=True)
-
-            env.step(dt)
-            time.sleep(dt)
-    except KeyboardInterrupt:
-        pass
-    finally:
+    def close(self) -> None:
         try:
-            env.close()
+            self.env.close()
         except Exception:
             pass
-        sub.close()
-    return 0

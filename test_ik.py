@@ -149,6 +149,37 @@ def test_neroik_end_to_end():
     print("  PASSED\n")
 
 
+
+def test_global_search_only_for_initial_acquire():
+    """Initial solve may scan globally; locked state must not globally reacquire."""
+    print("[test_global_search_only_for_initial_acquire] initial global only")
+    p = NeroParams.default()
+    cont = ContinuityParams(
+        local_theta0_window=0.0,
+        local_theta0_count=11,
+        enable_initial_global_search=True,
+        enable_global_fallback=False,
+    )
+
+    q0 = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+    state0 = ContinuityRuntimeState(q_prev=np.zeros(7))
+    q_first, report_first, state = solve_pose_continuous_with_state(
+        fk(q0, p), state=state0, p=p, n_psi=181, continuity=cont
+    )
+    assert q_first is not None
+    assert report_first["method"] == "continuous_global_fallback"
+
+    for q_far in _random_q(p, 80, seed=2026):
+        q_next, report_next, _ = solve_pose_continuous_with_state(
+            fk(q_far, p), state=state, p=p, n_psi=181, continuity=cont
+        )
+        if q_next is None:
+            assert report_next["method"] == "continuous_local_theta0"
+            print("  PASSED\n")
+            return
+
+    raise AssertionError("Could not find a reachable target outside the locked local theta0 window")
+
 def test_performance():
     """Measure single-solve time at 50 Hz target."""
     print("[test_performance] solve time benchmark")
@@ -163,29 +194,23 @@ def test_performance():
         q = np.clip(q, p.joint_limits[:, 0], p.joint_limits[:, 1])
         targets.append(fk(q, p))
 
-    for label, enable_qp in [("QP on", True), ("QP off", False)]:
-        cont = ContinuityParams(
-            local_theta0_count=cfg.local_theta0_count,
-            local_theta0_window=cfg.local_theta0_window,
-            enable_qp=enable_qp,
-        )
-        state = ContinuityRuntimeState(q_prev=np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]))
-        q_sol, _, state = solve_pose_continuous_with_state(
-            targets[0], state=state, p=p, continuity=cont
-        )
-        times = []
-        for T in targets[1:]:
-            t0 = time.perf_counter()
-            q_sol, _, state = solve_pose_continuous_with_state(
-                T, state=state, p=p, continuity=cont
-            )
-            times.append(time.perf_counter() - t0)
+    cont = ContinuityParams(
+        local_theta0_count=cfg.local_theta0_count,
+        local_theta0_window=cfg.local_theta0_window,
+    )
+    state = ContinuityRuntimeState(q_prev=np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]))
+    _, _, state = solve_pose_continuous_with_state(targets[0], state=state, p=p, continuity=cont)
+    times = []
+    for T in targets[1:]:
+        t0 = time.perf_counter()
+        _, _, state = solve_pose_continuous_with_state(T, state=state, p=p, continuity=cont)
+        times.append(time.perf_counter() - t0)
 
-        avg_ms = np.mean(times) * 1000
-        p95_ms = np.percentile(times, 95) * 1000
-        max_ms = np.max(times) * 1000
-        ok = "OK" if max_ms < 20.0 else "TOO SLOW"
-        print(f"  {label:8s}: avg={avg_ms:.2f}ms  p95={p95_ms:.2f}ms  max={max_ms:.2f}ms  [{ok}]")
+    avg_ms = np.mean(times) * 1000
+    p95_ms = np.percentile(times, 95) * 1000
+    max_ms = np.max(times) * 1000
+    ok = "OK" if max_ms < 20.0 else "TOO SLOW"
+    print(f"  avg={avg_ms:.2f}ms  p95={p95_ms:.2f}ms  max={max_ms:.2f}ms  [{ok}]")
     print("  PASSED\n")
 
 
@@ -194,5 +219,6 @@ if __name__ == "__main__":
     test_frame_conversion()
     test_ik_roundtrip()
     test_neroik_end_to_end()
+    test_global_search_only_for_initial_acquire()
     test_performance()
     print("All tests passed.")
