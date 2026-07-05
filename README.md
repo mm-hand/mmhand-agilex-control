@@ -19,29 +19,30 @@ Use this first. You only need the APK build toolchain to rebuild the headset app
 
 ## Install dependencies
 
-### PC-side tools (Ubuntu)
+### PC-side tools (Ubuntu + RoboStack)
 
-Use the system Python for ROS 2. This matters if Conda or another Python is
-active: ROS Jazzy Debian packages are built for Ubuntu's `/usr/bin/python3`,
-not a Conda `python3`.
-
-```bash
-sudo apt install -y adb python3-aiohttp
-source <(wget -qO- http://fishros.com/install)
-sudo apt update
-sudo apt install -y ros-jazzy-rclpy ros-jazzy-geometry-msgs ros-jazzy-std-msgs
-# If you use Humble: replace jazzy with humble.
-```
-
-If ROS 2 was already installed before running the FishROS installer, align the
-installed Jazzy packages to the same apt repository batch. Mixed old/new ROS
-packages can break `rclpy.create_node()` before this project reaches ADB.
+Use the same conda/RoboStack ROS environment as `analytic_control`. Do not
+source `/opt/ros/jazzy/setup.bash` when this environment is active.
 
 ```bash
-sudo apt install -y --only-upgrade $(dpkg -l 'ros-jazzy-*' | awk '/^ii/ {print $2}')
-source /opt/ros/jazzy/setup.bash
-/usr/bin/python3 -c 'import rclpy; rclpy.init(args=[]); n=rclpy.create_node("probe"); print("ok"); n.destroy_node(); rclpy.shutdown()'
+sudo apt install -y adb
+
+conda create -y -n mmhand-ros --override-channels \
+  -c conda-forge -c robostack-jazzy \
+  python=3.12 \
+  ros-jazzy-ros-base \
+  ros-jazzy-geometry-msgs \
+  ros-jazzy-std-msgs \
+  ros-jazzy-rmw-cyclonedds-cpp
+
+conda activate mmhand-ros
+export PYTHONNOUSERSITE=1
+python -m pip install aiohttp
 ```
+
+`aiohttp` is only needed for visual-only browser mode. ROS publishing only uses
+`rclpy`, `geometry_msgs`, and `std_msgs` from RoboStack. The launcher defaults
+to `mmhand-ros`; set `MMHAND_ROS_ENV=<name>` if you use a different env name.
 
 ### APK build toolchain (Ubuntu only, if you want to modify apk)
 
@@ -79,14 +80,16 @@ ROS communication:
 
 ```bash
 ./run_ubuntu_ros.sh --vr-port 9100
-# Humble:
-ROS_DISTRO=humble ./run_ubuntu_ros.sh --vr-port 9100
+# Optional: use a different conda env name.
+MMHAND_ROS_ENV=my-ros-env ./run_ubuntu_ros.sh --vr-port 9100
 ```
 
 Visual-only, no ROS:
 
 ```bash
-/usr/bin/python3 pc/run.py --vr-port 9100 --visualize-port 8765
+conda activate mmhand-ros
+export PYTHONNOUSERSITE=1
+python pc/run.py --vr-port 9100 --visualize-port 8765
 ```
 
 Receiver commands run `adb reverse tcp:29761 tcp:<vr-port>` and launch the APK.
@@ -162,6 +165,6 @@ read_pico/
 
 ## Debug
 
-PC side: `/usr/bin/python3 pc/run.py ... 2>&1 | tee debug.log`
+PC side: `conda activate mmhand-ros && PYTHONNOUSERSITE=1 python pc/run.py ... 2>&1 | tee debug.log`
 
 PICO side: `adb logcat -s PicoPose:V`

@@ -165,7 +165,8 @@ def free_port(port):
 
 
 async def main(args):
-    ros = RosPublisher() if os.environ.get("READ_PICO_ROS") == "1" else None
+    ros_enabled = os.environ.get("READ_POSE_ROS") == "1" or os.environ.get("READ_PICO_ROS") == "1"
+    ros = RosPublisher() if ros_enabled else None
     state = State(ros.publish if ros else None)
     runner = monitor = None
     try:
