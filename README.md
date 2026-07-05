@@ -4,7 +4,23 @@ Pose-input teleoperation pipeline for Nero dual-arm IK, joint-space motion plann
 
 ## Install
 
-ROS 2 Jazzy must already be installed. The pose input publisher must publish:
+Use a conda/RoboStack ROS environment. Do not source `/opt/ros/jazzy/setup.bash`
+when this environment is active.
+
+```bash
+conda create -y -n mmhand-ros --override-channels \
+  -c conda-forge -c robostack-jazzy \
+  python=3.12 \
+  ros-jazzy-ros-base \
+  ros-jazzy-geometry-msgs \
+  ros-jazzy-std-msgs \
+  ros-jazzy-rmw-cyclonedds-cpp
+
+conda activate mmhand-ros
+export PYTHONNOUSERSITE=1
+```
+
+The pose input publisher must publish:
 
 ```text
 /read_pose/poses      geometry_msgs/PoseArray
@@ -15,8 +31,16 @@ Install Python dependencies:
 
 ```bash
 cd /home/starcycle/nero_control/analytic_control
-source /opt/ros/jazzy/setup.bash
-/usr/bin/python3 -m pip install --user --break-system-packages -r requirements.txt
+python -m pip install -r requirements.txt
+
+# RoboStack currently provides NumPy 2.x. Rebuild Swift Cython extensions
+# inside this environment so they match the local NumPy ABI.
+python -m pip install --force-reinstall --no-cache-dir \
+  --no-binary=spatialgeometry --no-build-isolation --no-deps \
+  spatialgeometry==1.1.0
+python -m pip install --force-reinstall --no-cache-dir \
+  --no-binary=swift-sim --no-build-isolation --no-deps \
+  swift-sim==1.1.0
 ```
 
 ## Build Cython IK
@@ -25,7 +49,9 @@ The analytic IK solver lives in `ik_solver.pyx`. Build it before running:
 
 ```bash
 cd /home/starcycle/nero_control/analytic_control
-/usr/bin/python3 setup.py build_ext --inplace
+conda activate mmhand-ros
+export PYTHONNOUSERSITE=1
+python setup.py build_ext --inplace
 ```
 
 This creates generated C and `.so` files that are ignored by git. Do not edit generated files; edit `ik_solver.pyx` and rebuild.
@@ -48,8 +74,9 @@ Start the pose input publisher first, then run:
 
 ```bash
 cd /home/starcycle/nero_control/analytic_control
-source /opt/ros/jazzy/setup.bash
-/usr/bin/python3 run.py
+conda activate mmhand-ros
+export PYTHONNOUSERSITE=1
+python run.py
 ```
 
 Open the Swift URL printed by the process, typically `http://localhost:52000`.
@@ -78,9 +105,11 @@ The IK solver outputs target joint angles. `motion.py` is the only layer that se
 
 ```bash
 cd /home/starcycle/nero_control/analytic_control
-/usr/bin/python3 setup.py build_ext --inplace
-/usr/bin/python3 test_ik.py
-/usr/bin/python3 test_motion.py
+conda activate mmhand-ros
+export PYTHONNOUSERSITE=1
+python setup.py build_ext --inplace
+python test_ik.py
+python test_motion.py
 ```
 
 ## Files
