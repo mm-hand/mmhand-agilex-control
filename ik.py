@@ -70,6 +70,11 @@ class NeroIK:
         )
         self._state = ContinuityRuntimeState(q_prev=self.robot.q.copy())
 
+    def reset_state(self, q: np.ndarray) -> None:
+        q = np.asarray(q, dtype=float).reshape(7)
+        self.robot.q = q.copy()
+        self._state = ContinuityRuntimeState(q_prev=q.copy())
+
     def solve(self, transform_arm_base_to_flange: np.ndarray) -> np.ndarray | None:
         q, _report = self.solve_with_report(transform_arm_base_to_flange)
         return q
@@ -125,8 +130,8 @@ class NeroIK:
         dist = float(np.linalg.norm(SW))
         l_se = abs(float(p.d_i[2]))        # 0.31
         l_ew = abs(float(p.d_i[4]))        # 0.27
-        max_safe = 0.95 * (l_se + l_ew)    # 0.551m
-        min_safe = 1.05 * abs(l_se - l_ew) # 0.042m
+        max_safe = self.config.reach_max_ratio * (l_se + l_ew)
+        min_safe = self.config.reach_min_ratio * abs(l_se - l_ew)
 
         report = {
             "clamped": False,

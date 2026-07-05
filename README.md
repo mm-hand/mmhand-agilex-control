@@ -1,6 +1,6 @@
 # analytic_control
 
-Pose-input teleoperation pipeline for Nero dual-arm IK, joint-space motion planning, and Swift visualization.
+Pose-input teleoperation pipeline for Nero analytic IK, online joint-space safety motion, Swift visualization, and single-arm real control.
 
 ## Install
 
@@ -60,12 +60,13 @@ This creates generated C and `.so` files that are ignored by git. Do not edit ge
 
 All runtime parameters are centralized in `config.py`:
 
-- `RuntimeConfig`: mode, currently `dual_sim` by default; hardware modes are reserved.
+- `RuntimeConfig`: `dual_sim`, `left_real`, `right_real`; `dual_real` is reserved.
 - `PoseInputConfig`: ROS node name, `/read_pose/*` topics, freshness timeouts.
 - `FrameTransformConfig`: shoulder/base/tool calibration and human-to-robot scale.
-- `IkConfig`: analytic IK branch scoring and arm-angle search settings.
-- `FilterConfig`: One Euro filtering for input pose only.
-- `MotionConfig`: fixed command frequency plus joint velocity/acceleration limits for `jtraj`.
+- `IkConfig`: analytic IK scoring, branch switching gate, and arm-angle search.
+- `FilterConfig`: One Euro pose filter plus VR input speed/step limiter.
+- `MotionConfig`: online joint servo limits plus startup `jtraj` duration limits.
+- `RealArmConfig`: `pyAgxArm` SDK path, SocketCAN, startup pose, SDK speed, and send timing.
 - `LogConfig`: terminal logging is always enabled; file logging can be disabled here.
 
 ## Run
@@ -79,27 +80,33 @@ export PYTHONNOUSERSITE=1
 python run.py
 ```
 
-Open the Swift URL printed by the process, typically `http://localhost:52000`.
+`RuntimeConfig.mode = "dual_sim"` opens Swift, typically at `http://localhost:52000`.
+For real-arm modes, place the vendor SDK at `third_party/pyAgxArm`, set SocketCAN up first, then set `RuntimeConfig.mode` to `left_real` or `right_real`:
+
+```bash
+sudo ip link set can0 down
+sudo ip link set can0 type can bitrate 1000000
+sudo ip link set can0 up
+```
 
 Logs are printed to the terminal. If `LogConfig.enable_file_log` is true, logs are also written under `logs/` inside this repository.
 
 
 ## IK Policy
 
-The continuous IK score uses joint velocity, joint acceleration, pose error, arm-angle continuity, and joint-limit soft cost. Joint-limit cost biases candidates away from hard limits before the hard limit filter rejects them.
+The continuous IK score uses joint velocity, joint acceleration, pose error, arm-angle continuity, and joint-limit soft cost. Reach clamp is a feature: it saturates unreachable wrist targets before IK.
 
-The first solve may use a global arm-angle search to acquire a branch. After acquisition, each analytic candidate carries `(elbow, shoulder, wrist)` branch signs; subsequent solves only select candidates from the same branch. If that branch disappears, IK returns `None` and the control loop holds the previous command instead of switching branches.
+The first solve may use a global arm-angle search to acquire a branch. Later solves score all local candidates, but a branch change is accepted only when the maximum single-joint jump is below `branch_switch_max_joint_delta_rad` and the score improvement exceeds `branch_switch_min_improvement`. If IK fails, no new real-arm command is sent.
 
 ## Motion Policy
 
-The IK solver outputs target joint angles. `motion.py` is the only layer that sends joint commands to simulation or future hardware:
+`motion.py` is the final software safety layer between IK and sim/real output:
 
-1. It runs at `MotionConfig.command_hz`.
-2. It plans joint-space trajectories with `roboticstoolbox.jtraj`.
-3. It chooses trajectory duration from configured joint velocity and acceleration limits.
-4. It inherits current joint velocity when replanning, avoiding repeated stop-start motion.
-5. It replans only when the target moves beyond `replan_trigger_rad` and `min_replan_interval_s` has elapsed.
-6. If IK fails, it holds the current command and clears active trajectory.
+1. Every control tick follows the newest IK target, not an old cached goal.
+2. Joint velocity, joint acceleration, per-tick joint step, and inner joint limits are enforced.
+3. Missing IK target zeros commanded velocity and holds the current internal command.
+4. Real hardware receives no new command when the target is missing.
+5. `roboticstoolbox.jtraj` is kept only for startup or deliberate large recovery moves, not continuous teleop.
 
 ## Test
 
@@ -110,6 +117,7 @@ export PYTHONNOUSERSITE=1
 python setup.py build_ext --inplace
 python test_ik.py
 python test_motion.py
+python test_hardware.py
 ```
 
 ## Files
@@ -121,10 +129,10 @@ python test_motion.py
 - `frames.py`: pose-input-to-arm frame transforms
 - `ik.py`: Nero IK wrapper and URDF robot loader
 - `ik_solver.pyx`: Cython analytic arm-angle IK solver
-- `motion.py`: fixed-rate joint-space trajectory manager
-- `filters.py`: One Euro pose filter
+- `motion.py`: online joint-space servo and startup trajectory helper
+- `filters.py`: One Euro pose filter and input limiter
 - `sim.py`: Swift visualization backend
-- `backends.py`: backend protocol and reserved hardware backend
+- `hardware.py`: `pyAgxArm` real-arm backend
 - `logging_utils.py`: terminal and optional file logging
-- `test_ik.py`, `test_motion.py`: verification tests
+- `test_ik.py`, `test_motion.py`, `test_hardware.py`: verification tests
 - `nero_urdf/`: local URDF and meshes

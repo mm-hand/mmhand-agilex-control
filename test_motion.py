@@ -3,68 +3,70 @@ from __future__ import annotations
 import numpy as np
 
 from config import MotionConfig
-from motion import ArmMotionPlanner
-from control_loop import direct_joint_command
+from motion import ArmMotionPlanner, clip_to_joint_limits, plan_joint_trajectory
 
 
 def _cfg() -> MotionConfig:
     return MotionConfig(
         command_hz=50.0,
-        blend_trigger_rad=0.05,
-        replan_trigger_rad=0.08,
-        min_replan_interval_s=0.25,
-        min_duration_s=0.2,
-        max_duration_s=1.0,
+        max_joint_step_rad=0.02,
         max_velocity_rad_s=(0.8,) * 7,
         max_acceleration_rad_s2=(2.0,) * 7,
+        min_trajectory_duration_s=0.2,
+        max_trajectory_duration_s=1.0,
     )
 
 
-def test_initial_large_move_builds_trajectory():
+def test_online_servo_limits_first_step_acceleration():
+    cfg = _cfg()
+    planner = ArmMotionPlanner(cfg, np.zeros(7))
+    q = planner.step(np.ones(7), 0.0)
+    dt = 1.0 / cfg.command_hz
+    assert np.max(np.abs(q)) <= 2.0 * dt * dt + 1e-12
+
+
+def test_online_servo_limits_step_and_velocity():
+    cfg = _cfg()
+    planner = ArmMotionPlanner(cfg, np.zeros(7))
+    last = planner.q.copy()
+    for i in range(1, 80):
+        q = planner.step(np.ones(7), i / cfg.command_hz)
+        step = np.max(np.abs(q - last))
+        assert step <= cfg.max_joint_step_rad + 1e-12
+        assert np.max(np.abs(planner.qd)) <= max(cfg.max_velocity_rad_s) + 1e-12
+        last = q.copy()
+
+
+def test_none_target_holds_and_zeros_velocity():
     planner = ArmMotionPlanner(_cfg(), np.zeros(7))
-    q = planner.step(np.ones(7) * 0.5, 0.0)
-    assert planner.traj_q is not None
-    assert len(planner.traj_q) > 2
-    assert not np.allclose(q, np.ones(7) * 0.5)
-
-
-def test_small_target_change_does_not_replan():
-    planner = ArmMotionPlanner(_cfg(), np.zeros(7))
-    planner.step(np.ones(7) * 0.5, 0.0)
-    first_goal = planner.traj_goal.copy()
-    first_plan = planner.traj_q
-    planner.step(first_goal + 0.01, 0.30)
-    assert planner.traj_q is first_plan
-
-
-def test_large_target_change_replans_after_interval():
-    planner = ArmMotionPlanner(_cfg(), np.zeros(7))
-    planner.step(np.ones(7) * 0.5, 0.0)
-    first_plan = planner.traj_q
-    planner.step(np.ones(7) * -0.5, 0.30)
-    assert planner.traj_q is not None
-    assert planner.traj_q is not first_plan
-
-
-def test_none_target_holds_and_clears_trajectory():
-    planner = ArmMotionPlanner(_cfg(), np.zeros(7))
-    planner.step(np.ones(7) * 0.5, 0.0)
+    planner.step(np.ones(7), 0.0)
     held = planner.step(None, 0.02)
-    assert planner.traj_q is None
     assert np.allclose(held, planner.q)
+    assert np.allclose(planner.qd, 0.0)
 
 
-def test_direct_joint_command_updates_or_holds():
-    last = np.ones(7)
-    target = np.ones(7) * 2.0
-    assert np.allclose(direct_joint_command(target, last), target)
-    assert np.allclose(direct_joint_command(None, last), last)
+def test_joint_limit_clip_adds_margin():
+    cfg = _cfg()
+    q = np.ones(7) * 100.0
+    clipped = clip_to_joint_limits(q, cfg)
+    assert np.all(clipped < q)
+
+
+def test_startup_jtraj_helper_has_endpoints():
+    cfg = _cfg()
+    q0 = np.zeros(7)
+    q1 = np.ones(7) * 0.2
+    traj = plan_joint_trajectory(cfg, q0, q1)
+    assert traj.shape[1] == 7
+    assert len(traj) > 2
+    assert np.allclose(traj[0], q0)
+    assert np.max(np.abs(traj[-1] - q1)) < 1e-9
 
 
 if __name__ == "__main__":
-    test_initial_large_move_builds_trajectory()
-    test_small_target_change_does_not_replan()
-    test_large_target_change_replans_after_interval()
-    test_none_target_holds_and_clears_trajectory()
-    test_direct_joint_command_updates_or_holds()
+    test_online_servo_limits_first_step_acceleration()
+    test_online_servo_limits_step_and_velocity()
+    test_none_target_holds_and_zeros_velocity()
+    test_joint_limit_clip_adds_margin()
+    test_startup_jtraj_helper_has_endpoints()
     print("All motion tests passed.")

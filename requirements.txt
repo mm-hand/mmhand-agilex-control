@@ -5,3 +5,5 @@ spatialmath-python==1.1.16
 spatialgeometry==1.1.0
 websockets==10.4
 cython>=3.0.0
+python-can>=3.3.4
+gs-usb>=0.3.1

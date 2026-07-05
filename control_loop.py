@@ -6,9 +6,8 @@ import time
 
 import numpy as np
 
-from backends import HardwareBackend
 from config import ControlConfig
-from filters import PoseFilter
+from filters import PoseFilter, PoseInputLimiter
 from frames import arm_base_in_horizon, build_coordinate_frames
 from ik import NeroIK
 from motion import ArmMotionPlanner
@@ -46,7 +45,7 @@ def _ik_event(report: dict[str, object], config: ControlConfig) -> tuple[str | N
         return "slow", (round(solve_ms, 1), report.get("method"), report.get("selected_by"))
     clamp = report.get("target_clamp", {})
     if config.log.ik_log_target_clamp and isinstance(clamp, dict) and clamp.get("clamped"):
-        return "target_clamp", (clamp.get("reason"), round(float(clamp.get("wrist_dist_before_m", 0.0)), 4))
+        return "target_clamp", (clamp.get("reason"),)
     return None, ()
 
 
@@ -74,59 +73,85 @@ def _log_ik_report(
     logger.info("IK diagnostic: %s", json.dumps(_json_safe(payload), ensure_ascii=False, sort_keys=True))
 
 
-def direct_joint_command(q_target: np.ndarray | None, q_last: np.ndarray) -> np.ndarray:
-    return q_target.copy() if q_target is not None else q_last.copy()
+def _real_side(mode: str) -> str | None:
+    if mode == "left_real":
+        return "left"
+    if mode == "right_real":
+        return "right"
+    if mode == "dual_real":
+        raise NotImplementedError("dual_real is reserved; implement single-arm real first")
+    if mode == "dual_sim":
+        return None
+    raise ValueError(f"unknown runtime mode: {mode}")
+
+
+def _motion_step(planner: ArmMotionPlanner, target: np.ndarray | None, now: float) -> np.ndarray | None:
+    if target is None:
+        planner.step(None, now)
+        return None
+    return planner.step(target, now)
 
 
 def run_control(config: ControlConfig, logger: logging.Logger) -> int:
-    if config.runtime.mode != "dual_sim":
-        HardwareBackend(config.runtime.mode)
-        return 1
-
     pose_input = PoseInputSubscriber(config.pose_input)
-    left_ik = NeroIK(config.ik)
-    right_ik = NeroIK(config.ik)
-    bases = arm_base_in_horizon(config.frames)
-    backend = SwiftSimBackend(left_ik.robot, right_ik.robot, bases, config.sim, logger)
-
-    left_filter = PoseFilter(config.filters.pose)
-    right_filter = PoseFilter(config.filters.pose)
-    left_command = left_ik.robot.q.copy()
-    right_command = right_ik.robot.q.copy()
-    left_motion = ArmMotionPlanner(config.motion, left_command) if config.motion.enabled else None
-    right_motion = ArmMotionPlanner(config.motion, right_command) if config.motion.enabled else None
-
-    dt = 1.0 / config.motion.command_hz
-    n = 0
-    last_status = ""
-    last_ik_log = [{"time": 0.0, "key": None}, {"time": 0.0, "key": None}]
-    last_overrun_log = 0.0
+    backend = None
     try:
+        left_ik = NeroIK(config.ik)
+        right_ik = NeroIK(config.ik)
+        real_side = _real_side(config.runtime.mode)
+
+        if real_side is None:
+            bases = arm_base_in_horizon(config.frames)
+            backend = SwiftSimBackend(left_ik.robot, right_ik.robot, bases, config.sim, logger)
+            left_start = left_ik.robot.q.copy()
+            right_start = right_ik.robot.q.copy()
+        else:
+            from hardware import RealArmBackend
+
+            backend = RealArmBackend(real_side, config.real, config.motion, logger)
+            left_start = left_ik.robot.q.copy()
+            right_start = right_ik.robot.q.copy()
+            if real_side == "left":
+                left_start = backend.q_feedback.copy()
+                left_ik.reset_state(left_start)
+            else:
+                right_start = backend.q_feedback.copy()
+                right_ik.reset_state(right_start)
+
+        use_left = real_side is None or real_side == "left"
+        use_right = real_side is None or real_side == "right"
+
+        left_filter = PoseFilter(config.filters.pose)
+        right_filter = PoseFilter(config.filters.pose)
+        left_limiter = PoseInputLimiter(config.filters.input_limit)
+        right_limiter = PoseInputLimiter(config.filters.input_limit)
+        left_motion = ArmMotionPlanner(config.motion, left_start)
+        right_motion = ArmMotionPlanner(config.motion, right_start)
+
+        dt = 1.0 / config.motion.command_hz
+        n = 0
+        last_status = ""
+        last_ik_log = [{"time": 0.0, "key": None}, {"time": 0.0, "key": None}]
+        last_overrun_log = 0.0
         while True:
             tick_start = time.monotonic()
             pose_input.spin()
             now = time.monotonic()
-            left_pose = left_filter.apply(pose_input.get_left(), now)
-            right_pose = right_filter.apply(pose_input.get_right(), now)
+            left_pose = left_limiter.apply(left_filter.apply(pose_input.get_left(), now), now) if use_left else None
+            right_pose = right_limiter.apply(right_filter.apply(pose_input.get_right(), now), now) if use_right else None
             frames = build_coordinate_frames(left_pose, right_pose, config.frames)
 
             left_target = None
             right_target = None
-            if frames.left is not None:
+            if use_left and frames.left is not None:
                 left_target, left_report = left_ik.solve_with_report(frames.left.transform_arm_base_to_flange)
                 _log_ik_report(logger, config, "left", left_report, now, last_ik_log[0])
-            if frames.right is not None:
+            if use_right and frames.right is not None:
                 right_target, right_report = right_ik.solve_with_report(frames.right.transform_arm_base_to_flange)
                 _log_ik_report(logger, config, "right", right_report, now, last_ik_log[1])
 
-            if config.motion.enabled:
-                left_q = left_motion.step(left_target, now)
-                right_q = right_motion.step(right_target, now)
-            else:
-                left_command = direct_joint_command(left_target, left_command)
-                right_command = direct_joint_command(right_target, right_command)
-                left_q = left_command.copy()
-                right_q = right_command.copy()
+            left_q = _motion_step(left_motion, left_target, now) if use_left else None
+            right_q = _motion_step(right_motion, right_target, now) if use_right else None
 
             connected = pose_input.connected(config.pose_input.disconnect_s)
             if not connected:
@@ -160,6 +185,7 @@ def run_control(config: ControlConfig, logger: logging.Logger) -> int:
     except KeyboardInterrupt:
         pass
     finally:
-        backend.close()
+        if backend is not None:
+            backend.close()
         pose_input.close()
     return 0

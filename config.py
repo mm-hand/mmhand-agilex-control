@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class RuntimeConfig:
+    # dual_sim | left_real | right_real | dual_real
     mode: str = "dual_sim"
 
 
@@ -48,6 +49,8 @@ class IkConfig:
     w_limit: float = 1.0
     branch_switch_max_joint_delta_rad: float = 0.02
     branch_switch_min_improvement: float = 0.3
+    reach_max_ratio: float = 0.95
+    reach_min_ratio: float = 1.05
     enable_initial_global_search: bool = True
     enable_global_fallback: bool = False
 
@@ -61,29 +64,57 @@ class OneEuroConfig:
 
 
 @dataclass(frozen=True)
+class InputLimiterConfig:
+    enabled: bool = True
+    max_linear_speed_m_s: float = 1.0
+    max_angular_speed_rad_s: float = 4.0
+    max_position_step_m: float = 0.04
+    max_rotation_step_rad: float = 0.16
+
+
+@dataclass(frozen=True)
 class FilterConfig:
     pose: OneEuroConfig = field(default_factory=lambda: OneEuroConfig(enabled=True, min_cutoff=1.2, beta=0.03, d_cutoff=1.0))
+    input_limit: InputLimiterConfig = field(default_factory=InputLimiterConfig)
 
 
 @dataclass(frozen=True)
 class MotionConfig:
-    enabled: bool = False
+    # Online joint servo. It follows the newest IK target every tick while
+    # enforcing joint velocity, acceleration, and per-tick step limits.
     command_hz: float = 50.0
-    blend_trigger_rad: float = 0.05
-    replan_trigger_rad: float = 0.08
-    min_replan_interval_s: float = 0.25
-    min_duration_s: float = 0.12
-    max_duration_s: float = 2.0
-    max_velocity_rad_s: tuple[float, ...] = (1.0, 1.0, 1.2, 1.2, 1.5, 1.5, 1.5)
-    max_acceleration_rad_s2: tuple[float, ...] = (2.5, 2.5, 3.0, 3.0, 4.0, 4.0, 4.0)
+    max_joint_step_rad: float = 0.02
+    max_velocity_rad_s: tuple[float, ...] = (0.8, 0.8, 1.0, 1.0, 1.2, 1.2, 1.2)
+    max_acceleration_rad_s2: tuple[float, ...] = (2.0, 2.0, 2.5, 2.5, 3.0, 3.0, 3.0)
+    min_trajectory_duration_s: float = 0.2
+    max_trajectory_duration_s: float = 4.0
+    joint_limit_margin_rad: float = 0.035
 
 
 @dataclass(frozen=True)
 class SimConfig:
-    step_hz: float = 50.0
     visual_z_offset_m: float = 0.6
     show_horizon_frame: bool = True
     horizon_frame_axis_length_m: float = 0.18
+
+
+@dataclass(frozen=True)
+class RealArmConfig:
+    sdk_path: str = "third_party/pyAgxArm"
+    interface: str = "socketcan"
+    channel: str = "can0"
+    bitrate: int = 1_000_000
+    firmware: str = "auto"
+    speed_percent: int = 20
+    startup_timeout_s: float = 3.0
+    enable_timeout_s: float = 5.0
+    can_send_timeout_s: float = 0.05
+    can_frame_interval_s: float = 0.005
+    sdk_joint_limits_enabled: bool = False
+    move_to_startup_pose: bool = True
+    require_enter_before_startup_move: bool = True
+    startup_pose_rad: tuple[float, ...] = (-1.410645, 1.676232, -1.185393, 1.719429, -0.698777, -0.164131, -0.350829)
+    startup_pose_tolerance_rad: float = 0.017453293
 
 
 @dataclass(frozen=True)
@@ -108,4 +139,5 @@ class ControlConfig:
     filters: FilterConfig = field(default_factory=FilterConfig)
     motion: MotionConfig = field(default_factory=MotionConfig)
     sim: SimConfig = field(default_factory=SimConfig)
+    real: RealArmConfig = field(default_factory=RealArmConfig)
     log: LogConfig = field(default_factory=LogConfig)
