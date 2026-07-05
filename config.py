@@ -33,26 +33,26 @@ class FrameTransformConfig:
     rotation_controller_to_flange_rpy_deg: tuple[float, float, float] = (0.0, -180.0, 90.0)
 
     human_size_m: float = 1.0
-    robot_size_m: float = 1.7
+    robot_size_m: float = 1.4
 
 
 @dataclass(frozen=True)
 class IkConfig:
     urdf_path: str = "nero_urdf/nero.urdf"
     n_psi: int = 181
-    local_theta0_window: float = 1.0
+    local_theta0_window: float = 0.5
     local_theta0_count: int = 41
     w_vel: float = 1.0
     w_acc: float = 1.0
     w_pose: float = 0.1
     w_theta0: float = 1.0
     w_limit: float = 1.0
-    branch_switch_max_joint_delta_rad: float = 0.02
+    branch_switch_max_joint_delta_rad: float = 0.3
     branch_switch_min_improvement: float = 0.3
     reach_max_ratio: float = 0.95
     reach_min_ratio: float = 1.05
     enable_initial_global_search: bool = True
-    enable_global_fallback: bool = False
+    enable_global_fallback: bool = True
 
 
 @dataclass(frozen=True)
