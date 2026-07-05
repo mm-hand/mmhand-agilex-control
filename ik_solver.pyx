@@ -240,7 +240,7 @@ class ContinuityParams:
     w_pose: float = 0.1
     w_theta0: float = 0.15
     w_limit: float = 0.2
-    branch_switch_max_joint_delta_rad: float = 0.2
+    branch_switch_max_joint_delta_rad: float = 0.05
     branch_switch_min_improvement: float = 0.3
     # Initial global scan acquires the first branch; fallback controls later reacquire.
     enable_initial_global_search: bool = True
