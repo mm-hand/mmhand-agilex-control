@@ -201,14 +201,15 @@ def test_joint_limit_cost():
     print("  PASSED\n")
 
 
-def test_branch_lock_rejects_wrong_branch():
-    """After acquisition, an impossible branch id must hold instead of switching."""
-    print("[test_branch_lock_rejects_wrong_branch] strict analytic branch id")
+def test_branch_switch_gate():
+    """Branch changes are allowed only when the joint jump is small."""
+    print("[test_branch_switch_gate] gated analytic branch switch")
     p = NeroParams.default()
     q0 = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+    target = fk(q0, p)
     state0 = ContinuityRuntimeState(q_prev=np.zeros(7))
     q_first, report_first, state = solve_pose_continuous_with_state(
-        fk(q0, p), state=state0, p=p, n_psi=181
+        target, state=state0, p=p, n_psi=181
     )
     assert q_first is not None
     assert state.branch_prev == report_first["branch_selected"]
@@ -220,11 +221,27 @@ def test_branch_lock_rejects_wrong_branch():
         branch_prev=(9, 9, 9),
     )
     q_next, report_next, next_state = solve_pose_continuous_with_state(
-        fk(q0, p), state=wrong_state, p=p, n_psi=181
+        target, state=wrong_state, p=p, n_psi=181
     )
-    assert q_next is None
-    assert report_next["selected_by"] == "branch_lost"
-    assert next_state is wrong_state
+    assert q_next is not None
+    assert report_next["selected_by"] == "branch_reacquired_small_delta"
+    assert report_next["branch_switch_allowed"] is True
+    assert report_next["branch_switch_delta_max_rad"] <= report_next["branch_switch_max_joint_delta_rad"] + 1e-9
+    assert next_state.branch_prev == report_next["branch_selected"]
+
+    far_state = ContinuityRuntimeState(
+        q_prev=state.q_prev + np.array([0.4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+        q_prev2=state.q_prev,
+        theta0_prev=state.theta0_prev,
+        branch_prev=(9, 9, 9),
+    )
+    strict_cont = ContinuityParams(branch_switch_max_joint_delta_rad=0.05)
+    q_blocked, report_blocked, blocked_state = solve_pose_continuous_with_state(
+        target, state=far_state, p=p, n_psi=181, continuity=strict_cont
+    )
+    assert q_blocked is None
+    assert report_blocked["selected_by"] == "branch_lost_large_delta"
+    assert blocked_state is far_state
     print("  PASSED\n")
 
 def test_global_search_only_for_initial_acquire():
@@ -301,7 +318,7 @@ if __name__ == "__main__":
     test_neroik_report_diagnostics()
     test_target_clamp_report()
     test_joint_limit_cost()
-    test_branch_lock_rejects_wrong_branch()
+    test_branch_switch_gate()
     test_global_search_only_for_initial_acquire()
     test_performance()
     print("All tests passed.")

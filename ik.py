@@ -63,6 +63,8 @@ class NeroIK:
             w_pose=ik_config.w_pose,
             w_theta0=ik_config.w_theta0,
             w_limit=ik_config.w_limit,
+            branch_switch_max_joint_delta_rad=ik_config.branch_switch_max_joint_delta_rad,
+            branch_switch_min_improvement=ik_config.branch_switch_min_improvement,
             enable_initial_global_search=ik_config.enable_initial_global_search,
             enable_global_fallback=ik_config.enable_global_fallback,
         )

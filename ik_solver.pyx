@@ -110,6 +110,18 @@ cdef double _wrap_diff_norm7(np.ndarray a, np.ndarray b):
         s += d * d
     return math.sqrt(s)
 
+cdef double _wrap_diff_max_abs7(np.ndarray a, np.ndarray b):
+    cdef double max_abs = 0.0, d
+    cdef int i
+    for i in range(7):
+        d = a[i] - b[i]
+        if d > PI: d -= TWO_PI
+        elif d < -PI: d += TWO_PI
+        d = abs(d)
+        if d > max_abs:
+            max_abs = d
+    return max_abs
+
 cdef double _wrap_diff_norm7_2prev(np.ndarray q, np.ndarray q_prev, np.ndarray q_prev2):
     cdef double s = 0.0, d
     cdef int i
@@ -228,6 +240,8 @@ class ContinuityParams:
     w_pose: float = 0.1
     w_theta0: float = 0.15
     w_limit: float = 0.2
+    branch_switch_max_joint_delta_rad: float = 0.2
+    branch_switch_min_improvement: float = 0.3
     # Initial global scan acquires the first branch; fallback controls later reacquire.
     enable_initial_global_search: bool = True
     enable_global_fallback: bool = True
@@ -950,25 +964,6 @@ def solve_pose_continuous_with_state(
 
     pre_branch_count = len(all_solutions)
     pre_branch_hist = _branch_histogram(all_solutions)
-    if branch_prev is not None:
-        branch_solutions = [cand for cand in all_solutions if _candidate_branch(cand) == branch_prev]
-        if not branch_solutions:
-            return (
-                None,
-                {
-                    "ok": False,
-                    "failure_reason": "branch_lost",
-                    "method": method,
-                    "candidate_count": pre_branch_count,
-                    "selected_by": "branch_lost",
-                    "pose_err_best": None,
-                    "branch_prev": branch_prev,
-                    "branch_histogram": pre_branch_hist,
-                    "diagnostics": diag,
-                },
-                state,
-            )
-        all_solutions = branch_solutions
 
     scored = []
     for cand in all_solutions:
@@ -995,10 +990,58 @@ def solve_pose_continuous_with_state(
         scored.append((score, vel_cost, acc_cost, pose_cost, theta0_cost, limit_cost, cand))
 
     scored.sort(key=lambda x: x[0])
-    best = scored[0]
+    best_any = scored[0]
+    same_branch_scored = []
+    if branch_prev is not None:
+        same_branch_scored = [item for item in scored if _candidate_branch(item[6]) == branch_prev]
 
-    selected = best
-    selected_by = "best_score" if branch_prev is None else "best_score_same_branch"
+    selected = best_any
+    selected_by = "best_score"
+    same_branch_count = len(same_branch_scored)
+    branch_switch_delta = None
+    branch_switch_improvement = None
+    branch_switch_allowed = False
+
+    if branch_prev is not None:
+        if same_branch_scored:
+            best_same = same_branch_scored[0]
+            selected = best_same
+            selected_by = "best_score_same_branch"
+            if _candidate_branch(best_any[6]) != branch_prev:
+                branch_switch_delta = _wrap_diff_max_abs7(best_any[6][:7], q_prev)
+                branch_switch_improvement = float(best_same[0] - best_any[0])
+                branch_switch_allowed = (
+                    branch_switch_delta <= continuity.branch_switch_max_joint_delta_rad
+                    and branch_switch_improvement >= continuity.branch_switch_min_improvement
+                )
+                if branch_switch_allowed:
+                    selected = best_any
+                    selected_by = "branch_switch_gated"
+        else:
+            branch_switch_delta = _wrap_diff_max_abs7(best_any[6][:7], q_prev)
+            branch_switch_allowed = branch_switch_delta <= continuity.branch_switch_max_joint_delta_rad
+            if branch_switch_allowed:
+                selected = best_any
+                selected_by = "branch_reacquired_small_delta"
+            else:
+                return (
+                    None,
+                    {
+                        "ok": False,
+                        "failure_reason": "branch_lost",
+                        "method": method,
+                        "candidate_count": pre_branch_count,
+                        "same_branch_candidate_count": same_branch_count,
+                        "selected_by": "branch_lost_large_delta",
+                        "pose_err_best": None,
+                        "branch_prev": branch_prev,
+                        "branch_histogram": pre_branch_hist,
+                        "branch_switch_delta_max_rad": float(branch_switch_delta),
+                        "branch_switch_max_joint_delta_rad": float(continuity.branch_switch_max_joint_delta_rad),
+                        "diagnostics": diag,
+                    },
+                    state,
+                )
 
     q_best_full = selected[6]
     q_best = q_best_full[:7]
@@ -1019,7 +1062,13 @@ def solve_pose_continuous_with_state(
         "method": method,
         "candidate_count": len(all_solutions),
         "candidate_count_before_branch_filter": pre_branch_count,
+        "same_branch_candidate_count": same_branch_count,
         "selected_by": selected_by,
+        "branch_switch_allowed": bool(branch_switch_allowed),
+        "branch_switch_delta_max_rad": None if branch_switch_delta is None else float(branch_switch_delta),
+        "branch_switch_max_joint_delta_rad": float(continuity.branch_switch_max_joint_delta_rad),
+        "branch_switch_improvement": None if branch_switch_improvement is None else float(branch_switch_improvement),
+        "branch_switch_min_improvement": float(continuity.branch_switch_min_improvement),
         "score_best": float(selected[0]),
         "vel_cost_best": float(selected[1]),
         "acc_cost_best": float(selected[2]),
