@@ -93,19 +93,19 @@ Receiver commands run `adb reverse tcp:29761 tcp:<vr-port>` and launch the APK.
 
 ## ROS 2 topics
 
-Node: `read_pico`
+Node: `read_pose`
 
 ```text
-/read_pico/poses      geometry_msgs/PoseArray
-/read_pico/buttons    std_msgs/UInt32MultiArray
-/read_pico/tracked    std_msgs/UInt8MultiArray
+/read_pose/poses      geometry_msgs/PoseArray
+/read_pose/buttons    std_msgs/UInt32MultiArray
+/read_pose/tracked    std_msgs/UInt8MultiArray
 ```
 
 Conventions:
 
 ```text
 poses.poses[0] = left, poses.poses[1] = right
-poses.header.frame_id = "pico_horizon"
+poses.header.frame_id = "pose_input_horizon"
 buttons.data = [left_buttons, right_buttons]
 tracked.data = [left_valid, right_valid]
 ```

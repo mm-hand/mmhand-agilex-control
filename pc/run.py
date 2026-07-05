@@ -30,16 +30,16 @@ class RosPublisher:
         self.rclpy = rclpy
         self.Pose, self.PoseArray = Pose, PoseArray
         self.U8, self.U32 = UInt8MultiArray, UInt32MultiArray
-        self.node = rclpy.create_node("read_pico")
-        self.poses = self.node.create_publisher(PoseArray, "/read_pico/poses", qos_profile_sensor_data)
-        self.buttons = self.node.create_publisher(UInt32MultiArray, "/read_pico/buttons", qos_profile_sensor_data)
-        self.tracked = self.node.create_publisher(UInt8MultiArray, "/read_pico/tracked", qos_profile_sensor_data)
-        print("ROS 2: /read_pico/{poses,buttons,tracked}")
+        self.node = rclpy.create_node("read_pose")
+        self.poses = self.node.create_publisher(PoseArray, "/read_pose/poses", qos_profile_sensor_data)
+        self.buttons = self.node.create_publisher(UInt32MultiArray, "/read_pose/buttons", qos_profile_sensor_data)
+        self.tracked = self.node.create_publisher(UInt8MultiArray, "/read_pose/tracked", qos_profile_sensor_data)
+        print("ROS 2: /read_pose/{poses,buttons,tracked}")
 
     def publish(self, frame):
         poses = self.PoseArray()
         poses.header.stamp = self.node.get_clock().now().to_msg()
-        poses.header.frame_id = "pico_horizon"
+        poses.header.frame_id = "pose_input_horizon"
         for i, vi in enumerate((1, 9)):
             p = self.Pose()
             p.position.x, p.position.y, p.position.z = frame[vi + 1:vi + 4]
