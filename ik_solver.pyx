@@ -341,7 +341,7 @@ cdef list _solve_q123_c(double Ex, double Ey, double Ez,
     return sols
 
 
-cdef list _extract_567_c(double* T47):
+cdef list _extract_567_c(double* T47, object diag=None):
     cdef list sols = []
     cdef double c6 = T47[6]
     cdef double s6, th5, th6, th7
@@ -354,6 +354,7 @@ cdef list _extract_567_c(double* T47):
         # 不跳过该分支，而是钳制 s6 到小值，保留近似解。
         # 打分阶段的 pose_cost 会自然惩罚不精确的解。
         if abs(s6) < 1e-4:
+            _diag_inc(diag, "wrist_singularity_clamped_count")
             s6 = sgn * 1e-4
         th6 = math.atan2(s6, c6)
         th5 = math.atan2(T47[10] / s6, T47[2] / s6)
@@ -470,8 +471,91 @@ def _candidate_branch(np.ndarray cand):
     return (int(cand[17]), int(cand[18]), int(cand[19]))
 
 
+def _diag_inc(object diag, str key, int amount=1):
+    if diag is not None:
+        diag[key] = int(diag.get(key, 0)) + amount
+
+
+def _diag_joint_limit(object diag, int joint, double violation):
+    if diag is None:
+        return
+    counts = diag["joint_limit_reject_count"]
+    max_v = diag["joint_limit_max_violation_rad"]
+    counts[joint] = int(counts[joint]) + 1
+    if violation > float(max_v[joint]):
+        max_v[joint] = float(violation)
+
+
+def _target_reach_diagnostics(np.ndarray T, object p) -> Dict[str, object]:
+    S, W, q4_abs, _ = _compute_swe_from_target(T, p)
+    l_se = abs(float(p.d_i[2]))
+    l_ew = abs(float(p.d_i[4]))
+    sw = W - S
+    wrist_dist = float(np.linalg.norm(sw))
+    denom = 2.0 * l_se * l_ew
+    c4_raw = None if denom < 1e-12 else float((wrist_dist * wrist_dist - l_se * l_se - l_ew * l_ew) / denom)
+    min_reach = abs(l_se - l_ew)
+    max_reach = l_se + l_ew
+    if wrist_dist < 1e-10:
+        reach_status = "degenerate_shoulder_wrist_distance"
+    elif wrist_dist < min_reach:
+        reach_status = "too_close"
+    elif wrist_dist > max_reach:
+        reach_status = "too_far"
+    else:
+        reach_status = "within_triangle"
+    return {
+        "S": S.tolist(),
+        "W": W.tolist(),
+        "wrist_dist_m": wrist_dist,
+        "min_reach_m": min_reach,
+        "max_reach_m": max_reach,
+        "c4_raw": c4_raw,
+        "q4_abs": None if q4_abs is None else float(q4_abs),
+        "reach_status": reach_status,
+    }
+
+
+def _new_ik_diagnostics(np.ndarray T, object p) -> Dict[str, object]:
+    return {
+        "target_reach": _target_reach_diagnostics(T, p),
+        "theta0_checked": 0,
+        "theta0_feasible": 0,
+        "raw_wrist_candidates": 0,
+        "accepted_candidates": 0,
+        "target_wrist_unreachable_count": 0,
+        "degenerate_sw_count": 0,
+        "elbow_triangle_invalid_count": 0,
+        "q123_empty_count": 0,
+        "wrist_singularity_clamped_count": 0,
+        "joint_limit_rejected_total": 0,
+        "joint_limit_reject_count": [0, 0, 0, 0, 0, 0, 0],
+        "joint_limit_max_violation_rad": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    }
+
+
+def _branch_histogram(solutions: List[np.ndarray]) -> Dict[str, int]:
+    hist: Dict[str, int] = {}
+    for cand in solutions:
+        branch = _candidate_branch(cand)
+        key = "none" if branch is None else f"{branch[0]},{branch[1]},{branch[2]}"
+        hist[key] = hist.get(key, 0) + 1
+    return hist
+
+
+def _failure_reason_from_diagnostics(diag: Dict[str, object], default: str) -> str:
+    reach = diag.get("target_reach", {})
+    if isinstance(reach, dict) and reach.get("reach_status") in ("too_close", "too_far", "degenerate_shoulder_wrist_distance"):
+        return "target_wrist_unreachable"
+    if int(diag.get("joint_limit_rejected_total", 0)) > 0 and int(diag.get("accepted_candidates", 0)) == 0:
+        return "joint_limit_rejected_all"
+    if int(diag.get("theta0_checked", 0)) > 0 and int(diag.get("theta0_feasible", 0)) == 0:
+        return "no_feasible_theta0"
+    return default
+
+
 def _scan_theta0_solutions(
-    T07: np.ndarray, p: NeroParams, step: float
+    T07: np.ndarray, p: NeroParams, step: float, diag: Optional[Dict[str, object]] = None
 ) -> Tuple[List[float], List[Tuple[float, List[np.ndarray]]]]:
     """
     One-pass theta0 sweep:
@@ -482,10 +566,12 @@ def _scan_theta0_solutions(
     cached: List[Tuple[float, List[np.ndarray]]] = []
     for theta0 in np.arange(-math.pi, math.pi, step):
         t = float(theta0)
-        sols = _ik_one_arm_angle(T07, t, p)
+        sols = _ik_one_arm_angle(T07, t, p, diag)
         if sols:
             feasible_theta0.append(t)
             cached.append((t, sols))
+    if diag is not None:
+        diag["theta0_feasible"] = len(feasible_theta0)
     return feasible_theta0, cached
 
 
@@ -517,8 +603,9 @@ def _best_weighted_from_cached(
     return q_best, q_best_full, theta0_best
 
 
-cpdef list _ik_one_arm_angle(np.ndarray T07_np, double theta0, object p):
+cpdef list _ik_one_arm_angle(np.ndarray T07_np, double theta0, object p, object diag=None):
     cdef double T07[16], T_chain[16], T04[16], T_dh[16], T_inv[16], T47[16]
+    _diag_inc(diag, "theta0_checked")
     _np4_to_c(T07_np, T07)
 
     # Extract params once
@@ -542,9 +629,11 @@ cpdef list _ik_one_arm_angle(np.ndarray T07_np, double theta0, object p):
     cdef double l_sw=math.sqrt(dx*dx+dy*dy+dz*dz)
     cdef double l_se=abs(d2), l_ew=abs(d4)
     if l_sw < 1e-10:
+        _diag_inc(diag, "degenerate_sw_count")
         return []
     cdef double c4v=(l_sw*l_sw-l_se*l_se-l_ew*l_ew)/(2.0*l_se*l_ew)
     if c4v < -1.0 or c4v > 1.0:
+        _diag_inc(diag, "target_wrist_unreachable_count")
         return []
     if c4v < -1.0: c4v = -1.0
     elif c4v > 1.0: c4v = 1.0
@@ -555,6 +644,7 @@ cpdef list _ik_one_arm_angle(np.ndarray T07_np, double theta0, object p):
     cdef double xv=(l_se*l_se-l_ew*l_ew+l_sw*l_sw)/(2.0*l_sw)
     cdef double r2v=l_se*l_se-xv*xv
     if r2v < -1e-10:
+        _diag_inc(diag, "elbow_triangle_invalid_count")
         return []
     cdef double rv=math.sqrt(max(0.0, r2v))
     cdef double Cx=Sx+xv*usx, Cy=Sy+xv*usy, Cz=Sz+xv*usz
@@ -594,6 +684,8 @@ cpdef list _ik_one_arm_angle(np.ndarray T07_np, double theta0, object p):
     for elbow_sign in (1.0, -1.0):
         q4 = elbow_sign * q4_abs
         q123_sols = _solve_q123_c(Ex, Ey, Ez, Wx, Wy, Wz, q4, d0, d2, d4)
+        if not q123_sols:
+            _diag_inc(diag, "q123_empty_count")
         for q123 in q123_sols:
             th1 = q123[0] + to0
             th2 = q123[1] + to1
@@ -624,12 +716,21 @@ cpdef list _ik_one_arm_angle(np.ndarray T07_np, double theta0, object p):
                     _wrap_to_pi_scalar(th7 - to6),
                 ], dtype=float)
                 ok = True
+                _diag_inc(diag, "raw_wrist_candidates")
                 for j in range(7):
-                    if q_np[j] < joint_limits[j, 0] - 1e-8 or q_np[j] > joint_limits[j, 1] + 1e-8:
+                    if q_np[j] < joint_limits[j, 0] - 1e-8:
                         ok = False
+                        _diag_inc(diag, "joint_limit_rejected_total")
+                        _diag_joint_limit(diag, j, float(joint_limits[j, 0] - q_np[j]))
+                        break
+                    if q_np[j] > joint_limits[j, 1] + 1e-8:
+                        ok = False
+                        _diag_inc(diag, "joint_limit_rejected_total")
+                        _diag_joint_limit(diag, j, float(q_np[j] - joint_limits[j, 1]))
                         break
                 if not ok:
                     continue
+                _diag_inc(diag, "accepted_candidates")
                 extra_np = np.array([
                     theta0, Sx, Sy, Sz, Wx, Wy, Wz, Ex, Ey, Ez,
                     elbow_sign, shoulder_sign, wrist_sign,
@@ -639,13 +740,16 @@ cpdef list _ik_one_arm_angle(np.ndarray T07_np, double theta0, object p):
 
 
 def _collect_unique_solutions_for_theta0_grid(
-    T: np.ndarray, p: NeroParams, theta0_grid: np.ndarray
+    T: np.ndarray, p: NeroParams, theta0_grid: np.ndarray, diag: Optional[Dict[str, object]] = None
 ) -> List[np.ndarray]:
     all_solutions: List[np.ndarray] = []
     cdef double t
     for theta0 in theta0_grid:
         t = _wrap_to_pi_scalar(float(theta0))
-        all_solutions.extend(_ik_one_arm_angle(T, t, p))
+        sols = _ik_one_arm_angle(T, t, p, diag)
+        if sols and diag is not None:
+            diag["theta0_feasible"] = int(diag.get("theta0_feasible", 0)) + 1
+        all_solutions.extend(sols)
     unique_solutions: List[np.ndarray] = []
     for q in all_solutions:
         if not _is_duplicate(q, unique_solutions):
@@ -665,18 +769,24 @@ def ik_arm_angle_with_report(
         q_prev = np.zeros(7, dtype=float)
 
     T = np.array(T_target, dtype=float)
+    diag = _new_ik_diagnostics(T, p)
     S_dbg, W_dbg, q4_dbg, _ = _compute_swe_from_target(T, p)
     step = min(0.01, 2.0 * math.pi / max(1, n_psi))
-    feasible_theta0, cached = _scan_theta0_solutions(T, p, step=step)
+    feasible_theta0, cached = _scan_theta0_solutions(T, p, step=step, diag=diag)
 
     if len(feasible_theta0) == 0:
+        reason = _failure_reason_from_diagnostics(diag, "no_feasible_theta0")
         return (
             None,
             [],
             {
+                "ok": False,
+                "failure_reason": reason,
                 "method": "failed",
                 "candidate_count": 0,
+                "selected_by": "failed",
                 "pose_err_best": None,
+                "diagnostics": diag,
                 "swe_debug": {
                     "S": S_dbg.tolist(),
                     "W": W_dbg.tolist(),
@@ -689,13 +799,18 @@ def ik_arm_angle_with_report(
     q_best, q_best_full, best_t0 = _best_weighted_from_cached(cached, p, q_prev)
 
     if q_best is None:
+        reason = _failure_reason_from_diagnostics(diag, "no_candidate_after_constraints")
         return (
             None,
             [],
             {
+                "ok": False,
+                "failure_reason": reason,
                 "method": "failed",
                 "candidate_count": 0,
+                "selected_by": "failed",
                 "pose_err_best": None,
+                "diagnostics": diag,
                 "swe_debug": {
                     "S": S_dbg.tolist(),
                     "W": W_dbg.tolist(),
@@ -705,7 +820,6 @@ def ik_arm_angle_with_report(
             },
         )
 
-    # 仅保留最优解一条分支，便于与原文接口一致；候选数用可行臂角个数表征
     if q_best_full is None or best_t0 is None:
         q_best_full = np.concatenate(
             [
@@ -745,11 +859,15 @@ def ik_arm_angle_with_report(
         q_best,
         all_solutions,
         {
+            "ok": True,
+            "failure_reason": None,
             "method": "feasible_region",
             "candidate_count": len(feasible_theta0),
             "pose_err_best": e_best,
             "theta0_selected": theta0_best,
             "feasible_theta0_count": len(feasible_theta0),
+            "branch_histogram": _branch_histogram(all_solutions),
+            "diagnostics": diag,
             "swe_debug": swe_debug,
         },
     )
@@ -772,6 +890,7 @@ def solve_pose_continuous_with_state(
         continuity = ContinuityParams()
 
     T = np.array(T_target, dtype=float)
+    diag = _new_ik_diagnostics(T, p)
     q_prev = state.q_prev
     q_prev2 = state.q_prev2
     theta0_prev = state.theta0_prev
@@ -786,50 +905,66 @@ def solve_pose_continuous_with_state(
             max(11, continuity.local_theta0_count),
             endpoint=True,
         )
-        all_solutions = _collect_unique_solutions_for_theta0_grid(T, p, theta0_grid)
+        all_solutions = _collect_unique_solutions_for_theta0_grid(T, p, theta0_grid, diag)
 
     allow_global = (theta0_prev is None and continuity.enable_initial_global_search) or (theta0_prev is not None and continuity.enable_global_fallback)
 
     if not all_solutions and allow_global:
-        q_global, all_full, _ = ik_arm_angle_with_report(
+        q_global, all_full, global_report = ik_arm_angle_with_report(
             T, p=p, q_prev=q_prev, n_psi=n_psi
         )
         all_solutions = all_full
         method = "continuous_global_fallback"
+        diag = global_report.get("diagnostics", diag)
         if q_global is None:
             return (
                 None,
                 {
+                    "ok": False,
+                    "failure_reason": global_report.get("failure_reason", "global_search_failed"),
                     "method": method,
                     "candidate_count": 0,
                     "selected_by": "failed",
                     "pose_err_best": None,
+                    "branch_prev": branch_prev,
+                    "diagnostics": diag,
                 },
                 state,
             )
     elif not all_solutions:
+        reason = "local_window_empty_global_disabled" if theta0_prev is not None and not continuity.enable_global_fallback else _failure_reason_from_diagnostics(diag, "no_candidate_after_constraints")
         return (
             None,
             {
+                "ok": False,
+                "failure_reason": reason,
                 "method": method,
                 "candidate_count": 0,
                 "selected_by": "failed",
                 "pose_err_best": None,
+                "branch_prev": branch_prev,
+                "diagnostics": diag,
             },
             state,
         )
 
+    pre_branch_count = len(all_solutions)
+    pre_branch_hist = _branch_histogram(all_solutions)
     if branch_prev is not None:
         branch_solutions = [cand for cand in all_solutions if _candidate_branch(cand) == branch_prev]
         if not branch_solutions:
             return (
                 None,
                 {
+                    "ok": False,
+                    "failure_reason": "branch_lost",
                     "method": method,
-                    "candidate_count": len(all_solutions),
+                    "candidate_count": pre_branch_count,
                     "selected_by": "branch_lost",
                     "pose_err_best": None,
                     "branch_prev": branch_prev,
+                    "branch_histogram": pre_branch_hist,
+                    "diagnostics": diag,
                 },
                 state,
             )
@@ -879,8 +1014,11 @@ def solve_pose_continuous_with_state(
         branch_prev=branch_best if branch_best is not None else branch_prev,
     )
     report = {
+        "ok": True,
+        "failure_reason": None,
         "method": method,
         "candidate_count": len(all_solutions),
+        "candidate_count_before_branch_filter": pre_branch_count,
         "selected_by": selected_by,
         "score_best": float(selected[0]),
         "vel_cost_best": float(selected[1]),
@@ -890,6 +1028,10 @@ def solve_pose_continuous_with_state(
         "limit_cost_best": float(selected[5]),
         "pose_err_best": pose_best,
         "theta0_selected": theta0_best,
+        "branch_prev": branch_prev,
         "branch_selected": branch_best,
+        "branch_histogram": _branch_histogram(all_solutions),
+        "branch_histogram_before_filter": pre_branch_hist,
+        "diagnostics": diag,
     }
     return q_best, report, next_state

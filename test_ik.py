@@ -152,6 +152,40 @@ def test_neroik_end_to_end():
 
 
 
+def test_neroik_report_diagnostics():
+    """NeroIK.solve_with_report should preserve solve() behavior and expose diagnostics."""
+    print("[test_neroik_report_diagnostics] report fields")
+    ik = NeroIK(IkConfig())
+    p = NeroParams.default()
+    q_test = np.array([0.2, -0.1, 0.4, 0.9, -0.2, 0.2, 0.1])
+    T_flange = fk(q_test, p) @ _T_LINK7_TO_FLANGE
+    q, report = ik.solve_with_report(T_flange)
+    assert q is not None
+    assert report["ok"] is True
+    assert report["failure_reason"] is None
+    assert report["solve_ms"] >= 0.0
+    assert "target_clamp" in report
+    assert "diagnostics" in report
+    assert "target_reach" in report["diagnostics"]
+    assert "branch_selected" in report
+    print("  PASSED\n")
+
+
+def test_target_clamp_report():
+    """Targets outside the safe SEW reach range should be logged as clamped."""
+    print("[test_target_clamp_report] far target clamp")
+    ik = NeroIK(IkConfig())
+    T_flange = np.eye(4)
+    T_flange[:3, 3] = np.array([2.0, 0.0, 0.2])
+    _q, report = ik.solve_with_report(T_flange)
+    clamp = report["target_clamp"]
+    assert clamp["clamped"] is True
+    assert clamp["reason"] == "too_far"
+    assert clamp["wrist_dist_after_m"] <= clamp["max_safe_m"] + 1e-12
+    assert "diagnostics" in report
+    print("  PASSED\n")
+
+
 def test_joint_limit_cost():
     """Joint-limit soft cost should be low at center and high near limits."""
     print("[test_joint_limit_cost] center vs near limit")
@@ -218,6 +252,8 @@ def test_global_search_only_for_initial_acquire():
         )
         if q_next is None:
             assert report_next["method"] == "continuous_local_theta0"
+            assert report_next["failure_reason"] == "local_window_empty_global_disabled"
+            assert "diagnostics" in report_next
             print("  PASSED\n")
             return
 
@@ -262,6 +298,8 @@ if __name__ == "__main__":
     test_frame_conversion()
     test_ik_roundtrip()
     test_neroik_end_to_end()
+    test_neroik_report_diagnostics()
+    test_target_clamp_report()
     test_joint_limit_cost()
     test_branch_lock_rejects_wrong_branch()
     test_global_search_only_for_initial_acquire()

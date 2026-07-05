@@ -91,6 +91,10 @@ class LogConfig:
     filename: str = "analytic_control.log"
     max_bytes: int = 2_000_000
     backup_count: int = 3
+    ik_diagnostics_enabled: bool = True
+    ik_failure_log_interval_s: float = 0.5
+    ik_slow_solve_ms: float = 20.0
+    ik_log_target_clamp: bool = True
 
 
 @dataclass(frozen=True)

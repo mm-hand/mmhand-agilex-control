@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
 
@@ -13,6 +14,64 @@ from ik import NeroIK
 from motion import ArmMotionPlanner
 from pose_io import PoseInputSubscriber
 from sim import SwiftSimBackend
+
+
+def _json_safe(value):
+    if isinstance(value, np.ndarray):
+        return _json_safe(value.tolist())
+    if isinstance(value, np.generic):
+        return _json_safe(value.item())
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, float):
+        return value if np.isfinite(value) else None
+    return value
+
+
+def _ik_event(report: dict[str, object], config: ControlConfig) -> tuple[str | None, tuple[object, ...]]:
+    if not bool(report.get("ok", False)):
+        return (
+            "failure",
+            (
+                report.get("failure_reason"),
+                report.get("method"),
+                report.get("selected_by"),
+                report.get("branch_prev"),
+            ),
+        )
+    solve_ms = float(report.get("solve_ms", 0.0) or 0.0)
+    if solve_ms > config.log.ik_slow_solve_ms:
+        return "slow", (round(solve_ms, 1), report.get("method"), report.get("selected_by"))
+    clamp = report.get("target_clamp", {})
+    if config.log.ik_log_target_clamp and isinstance(clamp, dict) and clamp.get("clamped"):
+        return "target_clamp", (clamp.get("reason"), round(float(clamp.get("wrist_dist_before_m", 0.0)), 4))
+    return None, ()
+
+
+def _log_ik_report(
+    logger: logging.Logger,
+    config: ControlConfig,
+    arm: str,
+    report: dict[str, object],
+    now: float,
+    state: dict[str, object],
+) -> None:
+    if not config.log.ik_diagnostics_enabled:
+        return
+    event, key = _ik_event(report, config)
+    if event is None:
+        return
+    interval = config.log.ik_failure_log_interval_s if event == "failure" else 1.0
+    last_time = float(state.get("time", 0.0))
+    last_key = state.get("key")
+    if key == last_key and now - last_time < interval:
+        return
+    state["time"] = now
+    state["key"] = key
+    payload = {"event": event, "arm": arm, "ik": report}
+    logger.info("IK diagnostic: %s", json.dumps(_json_safe(payload), ensure_ascii=False, sort_keys=True))
 
 
 def direct_joint_command(q_target: np.ndarray | None, q_last: np.ndarray) -> np.ndarray:
@@ -40,7 +99,8 @@ def run_control(config: ControlConfig, logger: logging.Logger) -> int:
     dt = 1.0 / config.motion.command_hz
     n = 0
     last_status = ""
-    last_hold_log = [0.0, 0.0]
+    last_ik_log = [{"time": 0.0, "key": None}, {"time": 0.0, "key": None}]
+    last_overrun_log = 0.0
     try:
         while True:
             tick_start = time.monotonic()
@@ -53,15 +113,11 @@ def run_control(config: ControlConfig, logger: logging.Logger) -> int:
             left_target = None
             right_target = None
             if frames.left is not None:
-                left_target = left_ik.solve(frames.left.transform_arm_base_to_flange)
-                if left_target is None and now - last_hold_log[0] > 1.0:
-                    logger.info("IK hold: left")
-                    last_hold_log[0] = now
+                left_target, left_report = left_ik.solve_with_report(frames.left.transform_arm_base_to_flange)
+                _log_ik_report(logger, config, "left", left_report, now, last_ik_log[0])
             if frames.right is not None:
-                right_target = right_ik.solve(frames.right.transform_arm_base_to_flange)
-                if right_target is None and now - last_hold_log[1] > 1.0:
-                    logger.info("IK hold: right")
-                    last_hold_log[1] = now
+                right_target, right_report = right_ik.solve_with_report(frames.right.transform_arm_base_to_flange)
+                _log_ik_report(logger, config, "right", right_report, now, last_ik_log[1])
 
             if config.motion.enabled:
                 left_q = left_motion.step(left_target, now)
@@ -91,6 +147,15 @@ def run_control(config: ControlConfig, logger: logging.Logger) -> int:
 
             backend.update(left_q, right_q, frames, status, dt)
             elapsed = time.monotonic() - tick_start
+            if elapsed > dt and now - last_overrun_log > 1.0:
+                last_overrun_log = now
+                logger.info(
+                    "control loop overrun: %s",
+                    json.dumps(
+                        {"elapsed_ms": round(elapsed * 1000.0, 3), "budget_ms": round(dt * 1000.0, 3)},
+                        sort_keys=True,
+                    ),
+                )
             time.sleep(max(0.0, dt - elapsed))
     except KeyboardInterrupt:
         pass
