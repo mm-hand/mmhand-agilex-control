@@ -135,17 +135,6 @@ cdef double _pose_error_norm(np.ndarray T_cur, np.ndarray T_des):
         +(T_cur[0,2]*T_des[1,2]-T_cur[1,2]*T_des[0,2]))
     return math.sqrt(dpx*dpx+dpy*dpy+dpz*dpz+rex*rex+rey*rey+rez*rez)
 
-cdef double _dist7(np.ndarray a, np.ndarray b):
-    cdef double s = 0.0, d
-    cdef int i
-    for i in range(7):
-        d = a[i] - b[i]
-        if d > PI: d -= TWO_PI
-        elif d < -PI: d += TWO_PI
-        s += d * d
-    return math.sqrt(s)
-
-
 cpdef wrap_to_pi(x):
     return (x + np.pi) % (2.0 * np.pi) - np.pi
 
@@ -233,13 +222,12 @@ class ContinuityParams:
     # Local theta0 tracking window around previous selected theta0.
     local_theta0_window: float = 0.35
     local_theta0_count: int = 41
-    # Candidate score: w_vel*|dq| + w_acc*|ddq| + w_pose*pose_err + w_theta0*|dtheta0|
+    # Candidate score: velocity + acceleration + pose + arm-angle + joint-limit costs.
     w_vel: float = 1.0
     w_acc: float = 0.25
     w_pose: float = 0.1
     w_theta0: float = 0.15
-    # Hysteresis: keep locked branch unless significantly better candidate appears.
-    hysteresis_margin: float = 0.03
+    w_limit: float = 0.2
     # Initial global scan acquires the first branch; fallback controls later reacquire.
     enable_initial_global_search: bool = True
     enable_global_fallback: bool = True
@@ -250,7 +238,7 @@ class ContinuityRuntimeState:
     q_prev: np.ndarray
     q_prev2: Optional[np.ndarray] = None
     theta0_prev: Optional[float] = None
-    q_lock: Optional[np.ndarray] = None
+    branch_prev: Optional[Tuple[int, int, int]] = None
 
 
 cpdef list fk_all(np.ndarray q, object p):
@@ -349,7 +337,7 @@ cdef list _solve_q123_c(double Ex, double Ey, double Ez,
         if n3 < 1e-12:
             continue
         s3 /= n3; c3 /= n3
-        sols.append((q1, q2, math.atan2(s3, c3)))
+        sols.append((q1, q2, math.atan2(s3, c3), 1.0 if s2 > 0.0 else -1.0))
     return sols
 
 
@@ -370,7 +358,7 @@ cdef list _extract_567_c(double* T47):
         th6 = math.atan2(s6, c6)
         th5 = math.atan2(T47[10] / s6, T47[2] / s6)
         th7 = math.atan2(T47[5] / s6, -T47[4] / s6)
-        sols.append((th5, th6, th7))
+        sols.append((th5, th6, th7, sgn))
     return sols
 
 
@@ -446,6 +434,40 @@ def _weight_limits(q: float, q_min: float, q_max: float) -> float:
     if abs(den) < 1e-12:
         return 1e6
     return -b * x / den
+
+
+cdef double _joint_limit_cost(np.ndarray q, np.ndarray joint_limits):
+    cdef double total = 0.0
+    cdef double q_min, q_max, span, mid, x, edge
+    cdef int i
+    for i in range(7):
+        q_min = joint_limits[i, 0]
+        q_max = joint_limits[i, 1]
+        span = q_max - q_min
+        if span < 1e-12:
+            total += 1e6
+            continue
+        mid = 0.5 * (q_min + q_max)
+        x = 2.0 * (q[i] - mid) / span
+        if x > 1.0:
+            x = 1.0
+        elif x < -1.0:
+            x = -1.0
+        edge = 1.0 - abs(x) + 1e-6
+        total += (x * x) / (edge * edge)
+    return total / 7.0
+
+
+cpdef double joint_limit_cost(np.ndarray q, object p=None):
+    if p is None:
+        p = NeroParams.default()
+    return _joint_limit_cost(q, p.joint_limits)
+
+
+def _candidate_branch(np.ndarray cand):
+    if cand.shape[0] < 20:
+        return None
+    return (int(cand[17]), int(cand[18]), int(cand[19]))
 
 
 def _scan_theta0_solutions(
@@ -562,19 +584,21 @@ cpdef list _ik_one_arm_angle(np.ndarray T07_np, double theta0, object p):
     T_chain[11] -= d8 * T_chain[10]
 
     cdef list q_solutions = []
-    cdef double q4, th1, th2, th3, th4, th5, th6, th7
+    cdef double q4, th1, th2, th3, th4, th5, th6, th7, elbow_sign, shoulder_sign, wrist_sign
     cdef list q123_sols, th567_sols
     cdef tuple q123, th567
     cdef bint ok
     cdef int j
     cdef np.ndarray q_np, extra_np
 
-    for q4 in (q4_abs, -q4_abs):
+    for elbow_sign in (1.0, -1.0):
+        q4 = elbow_sign * q4_abs
         q123_sols = _solve_q123_c(Ex, Ey, Ez, Wx, Wy, Wz, q4, d0, d2, d4)
         for q123 in q123_sols:
             th1 = q123[0] + to0
             th2 = q123[1] + to1
             th3 = q123[2] + to2
+            shoulder_sign = q123[3]
             th4 = q4 + to3
 
             _dh_A_into(th1, d_i[0], a_prev[0], alpha_prev[0], T04)
@@ -589,7 +613,7 @@ cpdef list _ik_one_arm_angle(np.ndarray T07_np, double theta0, object p):
             _mat4_mul(T_inv, T_chain, T47)
 
             for th567 in _extract_567_c(T47):
-                th5 = th567[0]; th6 = th567[1]; th7 = th567[2]
+                th5 = th567[0]; th6 = th567[1]; th7 = th567[2]; wrist_sign = th567[3]
                 q_np = np.array([
                     _wrap_to_pi_scalar(th1 - to0),
                     _wrap_to_pi_scalar(th2 - to1),
@@ -606,7 +630,10 @@ cpdef list _ik_one_arm_angle(np.ndarray T07_np, double theta0, object p):
                         break
                 if not ok:
                     continue
-                extra_np = np.array([theta0, Sx, Sy, Sz, Wx, Wy, Wz, Ex, Ey, Ez], dtype=float)
+                extra_np = np.array([
+                    theta0, Sx, Sy, Sz, Wx, Wy, Wz, Ex, Ey, Ez,
+                    elbow_sign, shoulder_sign, wrist_sign,
+                ], dtype=float)
                 q_solutions.append(np.concatenate([q_np, extra_np]))
     return q_solutions
 
@@ -695,6 +722,9 @@ def ik_arm_angle_with_report(
                         float("nan"),
                         float("nan"),
                         float("nan"),
+                        0.0,
+                        0.0,
+                        0.0,
                     ],
                     dtype=float,
                 ),
@@ -708,7 +738,9 @@ def ik_arm_angle_with_report(
         "q4_abs": None if q4_dbg is None else float(q4_dbg),
     }
     e_best = _pose_error_norm(fk(q_best, p), T)
-    all_solutions = [q_best_full]
+    all_solutions = []
+    for _theta0, sols in cached:
+        all_solutions.extend(sols)
     return (
         q_best,
         all_solutions,
@@ -743,7 +775,7 @@ def solve_pose_continuous_with_state(
     q_prev = state.q_prev
     q_prev2 = state.q_prev2
     theta0_prev = state.theta0_prev
-    q_lock = state.q_lock
+    branch_prev = state.branch_prev
 
     all_solutions: List[np.ndarray] = []
     method = "continuous_local_theta0"
@@ -787,6 +819,22 @@ def solve_pose_continuous_with_state(
             state,
         )
 
+    if branch_prev is not None:
+        branch_solutions = [cand for cand in all_solutions if _candidate_branch(cand) == branch_prev]
+        if not branch_solutions:
+            return (
+                None,
+                {
+                    "method": method,
+                    "candidate_count": len(all_solutions),
+                    "selected_by": "branch_lost",
+                    "pose_err_best": None,
+                    "branch_prev": branch_prev,
+                },
+                state,
+            )
+        all_solutions = branch_solutions
+
     scored = []
     for cand in all_solutions:
         q = cand[:7]
@@ -797,6 +845,7 @@ def solve_pose_continuous_with_state(
         else:
             acc_cost = 0.0
         pose_cost = _pose_error_norm(fk(q, p), T)
+        limit_cost = _joint_limit_cost(q, p.joint_limits)
         if theta0_prev is None:
             theta0_cost = 0.0
         else:
@@ -806,25 +855,20 @@ def solve_pose_continuous_with_state(
             + continuity.w_acc * acc_cost
             + continuity.w_pose * pose_cost
             + continuity.w_theta0 * theta0_cost
+            + continuity.w_limit * limit_cost
         )
-        scored.append((score, vel_cost, acc_cost, pose_cost, theta0_cost, cand))
+        scored.append((score, vel_cost, acc_cost, pose_cost, theta0_cost, limit_cost, cand))
 
     scored.sort(key=lambda x: x[0])
     best = scored[0]
 
     selected = best
-    selected_by = "best_score"
-    if q_lock is not None:
-        lock_item = min(
-            scored, key=lambda x: _dist7(x[5][:7], q_lock)
-        )
-        if lock_item[0] <= best[0] + continuity.hysteresis_margin:
-            selected = lock_item
-            selected_by = "hysteresis_locked"
+    selected_by = "best_score" if branch_prev is None else "best_score_same_branch"
 
-    q_best_full = selected[5]
+    q_best_full = selected[6]
     q_best = q_best_full[:7]
     theta0_best = float(q_best_full[7]) if q_best_full.shape[0] > 7 else None
+    branch_best = _candidate_branch(q_best_full)
 
     pose_best = _pose_error_norm(fk(q_best, p), T)
 
@@ -832,7 +876,7 @@ def solve_pose_continuous_with_state(
         q_prev=q_best,
         q_prev2=q_prev.copy(),
         theta0_prev=theta0_best if theta0_best is not None else theta0_prev,
-        q_lock=q_best,
+        branch_prev=branch_best if branch_best is not None else branch_prev,
     )
     report = {
         "method": method,
@@ -843,7 +887,9 @@ def solve_pose_continuous_with_state(
         "acc_cost_best": float(selected[2]),
         "pose_cost_best": float(selected[3]),
         "theta0_cost_best": float(selected[4]),
+        "limit_cost_best": float(selected[5]),
         "pose_err_best": pose_best,
         "theta0_selected": theta0_best,
+        "branch_selected": branch_best,
     }
     return q_best, report, next_state

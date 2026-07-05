@@ -56,6 +56,13 @@ Open the Swift URL printed by the process, typically `http://localhost:52000`.
 
 Logs are printed to the terminal. If `LogConfig.enable_file_log` is true, logs are also written under `logs/` inside this repository.
 
+
+## IK Policy
+
+The continuous IK score uses joint velocity, joint acceleration, pose error, arm-angle continuity, and joint-limit soft cost. Joint-limit cost biases candidates away from hard limits before the hard limit filter rejects them.
+
+The first solve may use a global arm-angle search to acquire a branch. After acquisition, each analytic candidate carries `(elbow, shoulder, wrist)` branch signs; subsequent solves only select candidates from the same branch. If that branch disappears, IK returns `None` and the control loop holds the previous command instead of switching branches.
+
 ## Motion Policy
 
 The IK solver outputs target joint angles. `motion.py` is the only layer that sends joint commands to simulation or future hardware:

@@ -32,7 +32,7 @@ class FrameTransformConfig:
     rotation_controller_to_flange_rpy_deg: tuple[float, float, float] = (0.0, -180.0, 90.0)
 
     human_size_m: float = 1.0
-    robot_size_m: float = 1.45
+    robot_size_m: float = 1.7
 
 
 @dataclass(frozen=True)
@@ -45,7 +45,7 @@ class IkConfig:
     w_acc: float = 0.25
     w_pose: float = 0.1
     w_theta0: float = 0.15
-    hysteresis_margin: float = 0.5
+    w_limit: float = 0.2
     enable_initial_global_search: bool = True
     enable_global_fallback: bool = False
 

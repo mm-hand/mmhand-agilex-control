@@ -16,6 +16,7 @@ from ik_solver import (
     ContinuityRuntimeState,
     NeroParams,
     fk,
+    joint_limit_cost,
     pose_error,
     solve_pose_continuous_with_state,
 )
@@ -150,6 +151,48 @@ def test_neroik_end_to_end():
 
 
 
+
+def test_joint_limit_cost():
+    """Joint-limit soft cost should be low at center and high near limits."""
+    print("[test_joint_limit_cost] center vs near limit")
+    p = NeroParams.default()
+    q_center = np.mean(p.joint_limits, axis=1)
+    q_near = q_center.copy()
+    q_near[0] = p.joint_limits[0, 1] - 0.02 * (p.joint_limits[0, 1] - p.joint_limits[0, 0])
+    center_cost = joint_limit_cost(q_center, p)
+    near_cost = joint_limit_cost(q_near, p)
+    print(f"  center={center_cost:.3e} near={near_cost:.3e}")
+    assert center_cost < 1e-9
+    assert near_cost > center_cost + 10.0
+    print("  PASSED\n")
+
+
+def test_branch_lock_rejects_wrong_branch():
+    """After acquisition, an impossible branch id must hold instead of switching."""
+    print("[test_branch_lock_rejects_wrong_branch] strict analytic branch id")
+    p = NeroParams.default()
+    q0 = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+    state0 = ContinuityRuntimeState(q_prev=np.zeros(7))
+    q_first, report_first, state = solve_pose_continuous_with_state(
+        fk(q0, p), state=state0, p=p, n_psi=181
+    )
+    assert q_first is not None
+    assert state.branch_prev == report_first["branch_selected"]
+
+    wrong_state = ContinuityRuntimeState(
+        q_prev=state.q_prev,
+        q_prev2=state.q_prev2,
+        theta0_prev=state.theta0_prev,
+        branch_prev=(9, 9, 9),
+    )
+    q_next, report_next, next_state = solve_pose_continuous_with_state(
+        fk(q0, p), state=wrong_state, p=p, n_psi=181
+    )
+    assert q_next is None
+    assert report_next["selected_by"] == "branch_lost"
+    assert next_state is wrong_state
+    print("  PASSED\n")
+
 def test_global_search_only_for_initial_acquire():
     """Initial solve may scan globally; locked state must not globally reacquire."""
     print("[test_global_search_only_for_initial_acquire] initial global only")
@@ -219,6 +262,8 @@ if __name__ == "__main__":
     test_frame_conversion()
     test_ik_roundtrip()
     test_neroik_end_to_end()
+    test_joint_limit_cost()
+    test_branch_lock_rejects_wrong_branch()
     test_global_search_only_for_initial_acquire()
     test_performance()
     print("All tests passed.")

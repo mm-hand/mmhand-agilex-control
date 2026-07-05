@@ -61,7 +61,7 @@ class NeroIK:
             w_acc=ik_config.w_acc,
             w_pose=ik_config.w_pose,
             w_theta0=ik_config.w_theta0,
-            hysteresis_margin=ik_config.hysteresis_margin,
+            w_limit=ik_config.w_limit,
             enable_initial_global_search=ik_config.enable_initial_global_search,
             enable_global_fallback=ik_config.enable_global_fallback,
         )
