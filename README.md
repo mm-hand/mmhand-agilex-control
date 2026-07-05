@@ -94,9 +94,22 @@ Logs are printed to the terminal. If `LogConfig.enable_file_log` is true, logs a
 
 ## IK Policy
 
-The continuous IK score uses joint velocity, joint acceleration, pose error, arm-angle continuity, and joint-limit soft cost. Reach clamp is a feature: it saturates unreachable wrist targets before IK.
+Reach clamp is a feature: it saturates unreachable wrist targets before IK. The analytic IK then searches the 7-axis arm-angle redundancy. The full arm-angle range is `[-pi, pi)`. During continuous tracking, local search samples `local_theta0_count` values in `theta0_prev +/- local_theta0_window`; the current default is `0.5 rad` half-width and `41` samples.
 
-The first solve may use a global arm-angle search to acquire a branch. Later solves score all local candidates, but a branch change is accepted only when the maximum single-joint jump is below `branch_switch_max_joint_delta_rad` and the score improvement exceeds `branch_switch_min_improvement`. If IK fails, no new real-arm command is sent.
+Each candidate is scored by:
+
+```text
+score =
+  w_vel    * ||q - q_prev||
++ w_acc    * ||q - 2*q_prev + q_prev2||
++ w_pose   * pose_error(fk(q), target)
++ w_theta0 * |theta0 - theta0_prev|
++ w_limit  * joint_limit_cost(q)
+```
+
+Initial acquisition uses global arm-angle search when `enable_initial_global_search` is true. If local search finds no candidates later and `enable_global_fallback` is true, global fallback searches the full arm-angle range again.
+
+Branch handling depends on the search scope. Local search is conservative: it prefers the previous `(elbow, shoulder, wrist)` branch, and a branch change is accepted only when the maximum single-joint jump is below `branch_switch_max_joint_delta_rad` and the score improvement exceeds `branch_switch_min_improvement`. Global search/fallback is reacquisition: it selects the best scored global candidate even if that changes branch. If IK still fails, no new real-arm command is sent.
 
 ## Motion Policy
 

@@ -224,6 +224,7 @@ def test_branch_switch_gate():
         target, state=wrong_state, p=p, n_psi=181
     )
     assert q_next is not None
+    assert report_next["search_scope"] == "local"
     assert report_next["selected_by"] == "branch_reacquired_small_delta"
     assert report_next["branch_switch_allowed"] is True
     assert report_next["branch_switch_delta_max_rad"] <= report_next["branch_switch_max_joint_delta_rad"] + 1e-9
@@ -240,9 +241,53 @@ def test_branch_switch_gate():
         target, state=far_state, p=p, n_psi=181, continuity=strict_cont
     )
     assert q_blocked is None
+    assert report_blocked["search_scope"] == "local"
     assert report_blocked["selected_by"] == "branch_lost_large_delta"
     assert blocked_state is far_state
     print("  PASSED\n")
+
+
+def test_global_fallback_allows_branch_reacquire():
+    """Global fallback reacquires the best branch without applying local branch gates."""
+    print("[test_global_fallback_allows_branch_reacquire] global branch reacquire")
+    p = NeroParams.default()
+    cont = ContinuityParams(
+        local_theta0_window=0.0,
+        local_theta0_count=11,
+        branch_switch_max_joint_delta_rad=0.001,
+        enable_initial_global_search=True,
+        enable_global_fallback=True,
+    )
+
+    q0 = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+    q_first, _report_first, state = solve_pose_continuous_with_state(
+        fk(q0, p), state=ContinuityRuntimeState(q_prev=np.zeros(7)), p=p, n_psi=181, continuity=cont
+    )
+    assert q_first is not None
+
+    wrong_branch_state = ContinuityRuntimeState(
+        q_prev=state.q_prev + np.array([0.4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+        q_prev2=state.q_prev,
+        theta0_prev=state.theta0_prev,
+        branch_prev=(9, 9, 9),
+    )
+    for q_far in _random_q(p, 120, seed=3030):
+        q_next, report_next, next_state = solve_pose_continuous_with_state(
+            fk(q_far, p), state=wrong_branch_state, p=p, n_psi=181, continuity=cont
+        )
+        if report_next.get("search_scope") != "global":
+            continue
+        assert q_next is not None
+        assert report_next["method"] == "continuous_global_fallback"
+        assert report_next["selected_by"] == "best_score_global_branch_switch"
+        assert report_next["branch_switch_allowed"] is True
+        assert report_next["branch_switch_delta_max_rad"] > cont.branch_switch_max_joint_delta_rad
+        assert next_state.branch_prev == report_next["branch_selected"]
+        print("  PASSED\n")
+        return
+
+    raise AssertionError("Could not find a target that triggers global fallback")
+
 
 def test_global_search_only_for_initial_acquire():
     """Initial solve may scan globally; locked state must not globally reacquire."""
@@ -319,6 +364,7 @@ if __name__ == "__main__":
     test_target_clamp_report()
     test_joint_limit_cost()
     test_branch_switch_gate()
+    test_global_fallback_allows_branch_reacquire()
     test_global_search_only_for_initial_acquire()
     test_performance()
     print("All tests passed.")

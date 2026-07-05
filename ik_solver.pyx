@@ -912,6 +912,7 @@ def solve_pose_continuous_with_state(
 
     all_solutions: List[np.ndarray] = []
     method = "continuous_local_theta0"
+    search_scope = "local"
     if theta0_prev is not None:
         theta0_grid = np.linspace(
             theta0_prev - continuity.local_theta0_window,
@@ -929,6 +930,7 @@ def solve_pose_continuous_with_state(
         )
         all_solutions = all_full
         method = "continuous_global_fallback"
+        search_scope = "global"
         diag = global_report.get("diagnostics", diag)
         if q_global is None:
             return (
@@ -937,6 +939,7 @@ def solve_pose_continuous_with_state(
                     "ok": False,
                     "failure_reason": global_report.get("failure_reason", "global_search_failed"),
                     "method": method,
+                    "search_scope": search_scope,
                     "candidate_count": 0,
                     "selected_by": "failed",
                     "pose_err_best": None,
@@ -953,6 +956,7 @@ def solve_pose_continuous_with_state(
                 "ok": False,
                 "failure_reason": reason,
                 "method": method,
+                "search_scope": search_scope,
                 "candidate_count": 0,
                 "selected_by": "failed",
                 "pose_err_best": None,
@@ -1002,7 +1006,14 @@ def solve_pose_continuous_with_state(
     branch_switch_improvement = None
     branch_switch_allowed = False
 
-    if branch_prev is not None:
+    if branch_prev is not None and search_scope == "global":
+        selected = best_any
+        branch_switch_delta = _wrap_diff_max_abs7(best_any[6][:7], q_prev)
+        branch_switch_allowed = _candidate_branch(best_any[6]) != branch_prev
+        selected_by = "best_score_global_branch_switch" if branch_switch_allowed else "best_score_global_same_branch"
+        if same_branch_scored:
+            branch_switch_improvement = float(same_branch_scored[0][0] - best_any[0])
+    elif branch_prev is not None:
         if same_branch_scored:
             best_same = same_branch_scored[0]
             selected = best_same
@@ -1030,6 +1041,7 @@ def solve_pose_continuous_with_state(
                         "ok": False,
                         "failure_reason": "branch_lost",
                         "method": method,
+                        "search_scope": search_scope,
                         "candidate_count": pre_branch_count,
                         "same_branch_candidate_count": same_branch_count,
                         "selected_by": "branch_lost_large_delta",
@@ -1060,6 +1072,7 @@ def solve_pose_continuous_with_state(
         "ok": True,
         "failure_reason": None,
         "method": method,
+        "search_scope": search_scope,
         "candidate_count": len(all_solutions),
         "candidate_count_before_branch_filter": pre_branch_count,
         "same_branch_candidate_count": same_branch_count,
