@@ -37,6 +37,7 @@ Runtime parameters live in `config.py`:
 - `FrameTransformConfig`: shoulder, base, controller, and flange calibration.
 - `IkConfig`: arm-angle search and continuous-branch scoring.
 - `InputLimiterConfig`: controller pose speed and per-tick step limits.
+- `FilterConfig`: OneEuro filters for pose input and IK-output joint targets.
 - `MotionConfig`: online joint velocity, acceleration, step, and limit margins.
 - `SimConfig`: Swift visualization offset.
 - `RealArmConfig`: `pyAgxArm` path, SocketCAN channel, speed, and timeouts.
@@ -59,7 +60,7 @@ Logs are printed to stdout.
 
 ## Runtime Policy
 
-The loop is intentionally small: ROS pose input -> frame calibration -> analytic IK -> online joint motion limiter -> Swift or real-arm backend. Missing pose/IK targets hold the internal motion planner and send no new real-arm command. Real hardware is controlled with `move_js` after live joint feedback is available.
+The loop is intentionally small: ROS pose input -> OneEuro pose filter -> input limiter -> frame calibration -> analytic IK -> OneEuro joint-target filter -> online joint motion limiter -> Swift or real-arm backend. Missing pose/IK targets reset the IK-output filter, hold the internal motion planner, and send no new real-arm command. Real hardware is controlled with `move_js` after live joint feedback is available.
 
 ## Files
 
@@ -71,7 +72,7 @@ The loop is intentionally small: ROS pose input -> frame calibration -> analytic
 - `ik.py`: Nero IK wrapper and URDF loader
 - `ik_solver.pyx`: Cython analytic IK solver
 - `motion.py`: online joint-space limiter
-- `filters.py`: input pose limiter
+- `filters.py`: OneEuro pose/joint filters and input pose limiter
 - `sim.py`: Swift backend
 - `hardware.py`: `pyAgxArm` real-arm backend
 - `nero_urdf/`: URDF and meshes

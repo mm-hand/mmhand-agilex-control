@@ -40,11 +40,21 @@ class IkConfig:
     enable_initial_global_search: bool = True
     enable_global_fallback: bool = False
 @dataclass(frozen=True)
+class OneEuroConfig:
+    enabled: bool = True
+    min_cutoff: float = 1.2
+    beta: float = 0.03
+    d_cutoff: float = 1.0
+@dataclass(frozen=True)
 class InputLimiterConfig:
     max_linear_speed_m_s: float = 1.0
     max_angular_speed_rad_s: float = 4.0
     max_position_step_m: float = 0.04
     max_rotation_step_rad: float = 0.16
+@dataclass(frozen=True)
+class FilterConfig:
+    pose: OneEuroConfig = field(default_factory=OneEuroConfig)
+    ik_output: OneEuroConfig = field(default_factory=OneEuroConfig)
 @dataclass(frozen=True)
 class MotionConfig:
     command_hz: float = 50.0
@@ -72,6 +82,7 @@ class ControlConfig:
     frames: FrameTransformConfig = field(default_factory=FrameTransformConfig)
     ik: IkConfig = field(default_factory=IkConfig)
     input_limit: InputLimiterConfig = field(default_factory=InputLimiterConfig)
+    filters: FilterConfig = field(default_factory=FilterConfig)
     motion: MotionConfig = field(default_factory=MotionConfig)
     sim: SimConfig = field(default_factory=SimConfig)
     real: RealArmConfig = field(default_factory=RealArmConfig)
