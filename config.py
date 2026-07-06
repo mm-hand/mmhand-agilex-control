@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 @dataclass(frozen=True)
 class RuntimeConfig:
-    mode: str = "dual_sim"  # dual_sim | left_real | right_real
+    mode: str = "left_real"  # dual_sim | left_real | right_real
 @dataclass(frozen=True)
 class PoseInputConfig:
     node_name: str = "analytic_control"
@@ -73,7 +73,7 @@ class SimConfig:
     joint_log_period_s: float = 1.0
 @dataclass(frozen=True)
 class RealArmConfig:
-    sdk_path: str = "third_party/pyAgxArm"
+    sdk_path: str = "/home/collin/github/nero-node/third_party/pyAgxArm"
     interface: str = "socketcan"
     channel: str = "can0"
     bitrate: int = 1_000_000
