@@ -101,6 +101,15 @@ class RealArmBackend:
             self.robot.set_motion_mode("js")
         if hasattr(self.robot, "set_auto_set_motion_mode_enabled"):
             self.robot.set_auto_set_motion_mode_enabled(False)
+    def move_j_startup(self, q: np.ndarray) -> None:
+        q = validate_joint_command(q)
+        if hasattr(self.robot, "set_motion_mode"):
+            self.robot.set_motion_mode("j")
+        self.robot.move_j([float(v) for v in q])
+        feedback = read_joint_angles_optional(self.robot)
+        self.q_feedback = np.asarray(feedback, dtype=float).reshape(7) if feedback is not None else q.copy()
+        self._set_servo_mode()
+        self.last_sent_q = self.q_feedback.copy()
     def update(self, left_q: np.ndarray | None, right_q: np.ndarray | None, frames: CoordinateFrames, status: str, dt: float) -> None:
         q = left_q if self.side == "left" else right_q
         if q is None:

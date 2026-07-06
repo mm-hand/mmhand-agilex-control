@@ -17,6 +17,8 @@ def _real_side(mode: str) -> str | None:
     if mode == "dual_sim":
         return None
     raise ValueError(f"unknown runtime mode: {mode}")
+def _startup_pose(config: ControlConfig) -> np.ndarray:
+    return np.asarray(config.startup.left_pose_rad, dtype=float).reshape(7)
 def _motion_step(planner: ArmMotionPlanner, target: np.ndarray | None, now: float) -> np.ndarray | None:
     if target is None:
         planner.step(None, now)
@@ -30,6 +32,8 @@ def run_control(config: ControlConfig, logger: logging.Logger) -> int:
         right_ik = NeroIK(config.ik)
         real_side = _real_side(config.runtime.mode)
         if real_side is None:
+            if config.startup.enable_sim_pose:
+                left_ik.reset_state(_startup_pose(config))
             bases = arm_base_in_horizon(config.frames)
             backend = SwiftSimBackend(left_ik.robot, right_ik.robot, bases, config.sim, logger)
             left_start = left_ik.robot.q.copy()
@@ -40,6 +44,8 @@ def run_control(config: ControlConfig, logger: logging.Logger) -> int:
             left_start = left_ik.robot.q.copy()
             right_start = right_ik.robot.q.copy()
             if real_side == "left":
+                if config.startup.enable_real_move_j:
+                    backend.move_j_startup(_startup_pose(config))
                 left_start = backend.q_feedback.copy()
                 left_ik.reset_state(left_start)
             else:

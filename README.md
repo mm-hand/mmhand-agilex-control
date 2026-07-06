@@ -38,6 +38,7 @@ Runtime parameters live in `config.py`:
 - `IkConfig`: arm-angle search and continuous-branch scoring.
 - `InputLimiterConfig`: controller pose speed and per-tick step limits.
 - `FilterConfig`: OneEuro filters for pose input and IK-output joint targets.
+- `StartupConfig`: left-arm startup pose for simulation, with real-arm move_j disabled by default.
 - `MotionConfig`: online joint velocity, acceleration, step, and limit margins.
 - `SimConfig`: Swift visualization offset and console joint-angle log period.
 - `RealArmConfig`: `pyAgxArm` path, SocketCAN channel, speed, and timeouts.
@@ -60,7 +61,7 @@ Logs are printed to stdout.
 
 ## Runtime Policy
 
-The loop is intentionally small: ROS pose input -> OneEuro pose filter -> input limiter -> frame calibration -> analytic IK -> OneEuro joint-target filter -> online joint motion limiter -> Swift or real-arm backend. Missing pose/IK targets reset the IK-output filter, hold the internal motion planner, and send no new real-arm command. Real hardware is controlled with `move_js` after live joint feedback is available.
+The loop is intentionally small: optional left-arm startup pose -> ROS pose input -> OneEuro pose filter -> input limiter -> frame calibration -> analytic IK -> OneEuro joint-target filter -> online joint motion limiter -> Swift or real-arm backend. Missing pose/IK targets reset the IK-output filter, hold the internal motion planner, and send no new real-arm command. Real hardware is controlled with `move_js` after live joint feedback is available.
 
 ## Files
 

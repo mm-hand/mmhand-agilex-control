@@ -56,6 +56,11 @@ class FilterConfig:
     pose: OneEuroConfig = field(default_factory=OneEuroConfig)
     ik_output: OneEuroConfig = field(default_factory=OneEuroConfig)
 @dataclass(frozen=True)
+class StartupConfig:
+    left_pose_rad: tuple[float, ...] = (1.144, 1.1508, -0.327, 1.7663, -0.3133, 0.5086, 0.1827)
+    enable_sim_pose: bool = True
+    enable_real_move_j: bool = False
+@dataclass(frozen=True)
 class MotionConfig:
     command_hz: float = 50.0
     max_joint_step_rad: float = 0.02
@@ -84,6 +89,7 @@ class ControlConfig:
     ik: IkConfig = field(default_factory=IkConfig)
     input_limit: InputLimiterConfig = field(default_factory=InputLimiterConfig)
     filters: FilterConfig = field(default_factory=FilterConfig)
+    startup: StartupConfig = field(default_factory=StartupConfig)
     motion: MotionConfig = field(default_factory=MotionConfig)
     sim: SimConfig = field(default_factory=SimConfig)
     real: RealArmConfig = field(default_factory=RealArmConfig)
