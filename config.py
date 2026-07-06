@@ -65,6 +65,7 @@ class MotionConfig:
 @dataclass(frozen=True)
 class SimConfig:
     visual_z_offset_m: float = 0.6
+    joint_log_period_s: float = 1.0
 @dataclass(frozen=True)
 class RealArmConfig:
     sdk_path: str = "third_party/pyAgxArm"

@@ -39,7 +39,7 @@ Runtime parameters live in `config.py`:
 - `InputLimiterConfig`: controller pose speed and per-tick step limits.
 - `FilterConfig`: OneEuro filters for pose input and IK-output joint targets.
 - `MotionConfig`: online joint velocity, acceleration, step, and limit margins.
-- `SimConfig`: Swift visualization offset.
+- `SimConfig`: Swift visualization offset and console joint-angle log period.
 - `RealArmConfig`: `pyAgxArm` path, SocketCAN channel, speed, and timeouts.
 
 ## Run

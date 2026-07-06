@@ -1,5 +1,6 @@
 from __future__ import annotations
 import logging
+import time
 import numpy as np
 from spatialgeometry import Axes
 from spatialmath import SE3
@@ -17,6 +18,8 @@ class SwiftSimBackend:
         from swift.SwiftElement import Label
         self.logger = logger
         self.z_offset_m = sim_config.visual_z_offset_m
+        self.joint_log_period_s = max(0.0, float(sim_config.joint_log_period_s))
+        self.next_joint_log_t = 0.0
         self.left_robot = left_robot
         self.right_robot = right_robot
         self.left_robot.base = swift_se3(bases.left, self.z_offset_m)
@@ -55,7 +58,18 @@ class SwiftSimBackend:
             self.right_input.T = swift_se3(frames.right.transform_horizon_to_controller, self.z_offset_m).A
             self.right_flange.T = swift_se3(frames.right.transform_horizon_to_flange, self.z_offset_m).A
         self.status_label.desc = status
+        self._log_joint_angles()
         self.env.step(dt)
+    def _log_joint_angles(self) -> None:
+        if self.joint_log_period_s <= 0.0:
+            return
+        now = time.monotonic()
+        if now < self.next_joint_log_t:
+            return
+        self.next_joint_log_t = now + self.joint_log_period_s
+        left = np.array2string(np.asarray(self.left_robot.q, dtype=float), precision=4, suppress_small=True)
+        right = np.array2string(np.asarray(self.right_robot.q, dtype=float), precision=4, suppress_small=True)
+        self.logger.info("sim joints left=%s right=%s", left, right)
     def close(self) -> None:
         try:
             self.env.close()
