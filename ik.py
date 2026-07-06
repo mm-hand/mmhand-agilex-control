@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from time import perf_counter
-
 import numpy as np
 
 from config import IkConfig
@@ -76,33 +74,17 @@ class NeroIK:
         self._state = ContinuityRuntimeState(q_prev=q.copy())
 
     def solve(self, transform_arm_base_to_flange: np.ndarray) -> np.ndarray | None:
-        q, _report = self.solve_with_report(transform_arm_base_to_flange)
-        return q
-
-    def solve_with_report(self, transform_arm_base_to_flange: np.ndarray) -> tuple[np.ndarray | None, dict[str, object]]:
-        start = perf_counter()
-        T07_raw = transform_arm_base_to_flange @ _T_FLANGE_TO_LINK7
-        T07, clamp_report = self._clamp_target_reach_with_report(T07_raw)
-        q, report, self._state = solve_pose_continuous_with_state(
+        T07 = self._clamp_target_reach(transform_arm_base_to_flange @ _T_FLANGE_TO_LINK7)
+        q, _report, self._state = solve_pose_continuous_with_state(
             T07,
             state=self._state,
             p=self._p,
             n_psi=self._n_psi,
             continuity=self._continuity,
         )
-        result = dict(report)
-        result["ok"] = q is not None
-        result.setdefault("failure_reason", None if q is not None else "unknown")
-        result["solve_ms"] = (perf_counter() - start) * 1000.0
-        result["target_clamp"] = clamp_report
-        result["target_position_arm_base_m"] = T07[:3, 3].tolist()
-        return q, result
+        return q
 
     def _clamp_target_reach(self, T07: np.ndarray) -> np.ndarray:
-        T07_clamped, _report = self._clamp_target_reach_with_report(T07)
-        return T07_clamped
-
-    def _clamp_target_reach_with_report(self, T07: np.ndarray) -> tuple[np.ndarray, dict[str, object]]:
         """钳制目标位姿到安全可达范围，避免肘部奇异。
 
         Nero 上臂长 l_se = 0.31m，前臂长 l_ew = 0.27m。
@@ -133,23 +115,10 @@ class NeroIK:
         max_safe = self.config.reach_max_ratio * (l_se + l_ew)
         min_safe = self.config.reach_min_ratio * abs(l_se - l_ew)
 
-        report = {
-            "clamped": False,
-            "reason": None,
-            "wrist_dist_before_m": dist,
-            "wrist_dist_after_m": dist,
-            "min_safe_m": min_safe,
-            "max_safe_m": max_safe,
-            "S": S.tolist(),
-            "W_before": W.tolist(),
-            "W_after": W.tolist(),
-        }
-
         if dist < 1e-10:
-            report["reason"] = "degenerate_shoulder_wrist_distance"
-            return T07, report
+            return T07
         if min_safe <= dist <= max_safe:
-            return T07, report
+            return T07
 
         # 钳制 |SW| 到安全范围
         target_dist = max(min_safe, min(max_safe, dist))
@@ -160,12 +129,4 @@ class NeroIK:
         O7_clamped = W_clamped + d6 * z7
         T07_clamped = T07.copy()
         T07_clamped[:3, 3] = O7_clamped + d8 * z7
-        report.update(
-            {
-                "clamped": True,
-                "reason": "too_far" if dist > max_safe else "too_close",
-                "wrist_dist_after_m": target_dist,
-                "W_after": W_clamped.tolist(),
-            }
-        )
-        return T07_clamped, report
+        return T07_clamped

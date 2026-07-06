@@ -60,7 +60,7 @@ This creates generated C and `.so` files that are ignored by git. Do not edit ge
 
 All runtime parameters are centralized in `config.py`:
 
-- `RuntimeConfig`: `dual_sim`, `left_real`, `right_real`; `dual_real` is reserved.
+- `RuntimeConfig`: `dual_sim`, `left_real`, `right_real`.
 - `PoseInputConfig`: ROS node name, `/read_pose/*` topics, freshness timeouts.
 - `FrameTransformConfig`: shoulder/base/tool calibration and human-to-robot scale.
 - `IkConfig`: analytic IK scoring, branch switching gate, and arm-angle search.
@@ -102,9 +102,9 @@ Each candidate is scored by:
 score =
   w_vel    * ||q - q_prev||
 + w_acc    * ||q - 2*q_prev + q_prev2||
-+ w_pose   * pose_error(fk(q), target)
++ w_pose   * pose error norm for fk(q) vs target
 + w_theta0 * |theta0 - theta0_prev|
-+ w_limit  * joint_limit_cost(q)
++ w_limit  * joint limit cost
 ```
 
 Initial acquisition uses global arm-angle search when `enable_initial_global_search` is true. If local search finds no candidates later and `enable_global_fallback` is true, global fallback searches the full arm-angle range again.
