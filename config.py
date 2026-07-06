@@ -22,9 +22,9 @@ class PoseInputConfig:
 class FrameTransformConfig:
     # All translations are meters. RPY tuples are degrees, ordered roll/pitch/yaw.
     translation_left_shoulder_to_left_arm_base_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
-    rotation_left_shoulder_to_left_arm_base_rpy_deg: tuple[float, float, float] = (126.2063, -12.2002, -143.7937)
+    rotation_left_shoulder_to_left_arm_base_rpy_deg: tuple[float, float, float] = (0.0, -90.0, 0.0)
     translation_right_shoulder_to_right_arm_base_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
-    rotation_right_shoulder_to_right_arm_base_rpy_deg: tuple[float, float, float] = (-126.206258, -12.200192, -36.206315)
+    rotation_right_shoulder_to_right_arm_base_rpy_deg: tuple[float, float, float] = (0.0, -90.0, 180.0)
 
     translation_horizon_to_left_shoulder_m: tuple[float, float, float] = (-0.16, 0.0, 0.0)
     translation_horizon_to_right_shoulder_m: tuple[float, float, float] = (0.16, 0.0, 0.0)
