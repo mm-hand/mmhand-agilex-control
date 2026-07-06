@@ -40,15 +40,15 @@ class FrameTransformConfig:
 class IkConfig:
     urdf_path: str = "nero_urdf/nero.urdf"
     n_psi: int = 181
-    local_theta0_window: float = 1
-    local_theta0_count: int = 200
-    w_vel: float = 1.0
-    w_acc: float = 1.0
-    w_pose: float = 0.5
-    w_theta0: float = 1.0
-    w_limit: float = 1.0
-    branch_switch_max_joint_delta_rad: float = 0.1
-    branch_switch_min_improvement: float = 2.0
+    local_theta0_window: float = 0.7
+    local_theta0_count: int = 50
+    w_vel: float = 0.0
+    w_acc: float = 0.0
+    w_pose: float = 0.7
+    w_theta0: float = 0.1
+    w_limit: float = 0.4
+    branch_switch_max_joint_delta_rad: float = 0.2
+    branch_switch_min_improvement: float = 0.5
     reach_max_ratio: float = 0.95
     reach_min_ratio: float = 1.05
     enable_initial_global_search: bool = True
