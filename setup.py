@@ -1,7 +1,6 @@
 from setuptools import setup, Extension
 from Cython.Build import cythonize
 import numpy as np
-
 extensions = [
     Extension(
         "ik_solver",
@@ -9,7 +8,6 @@ extensions = [
         include_dirs=[np.get_include()],
     )
 ]
-
 setup(
     ext_modules=cythonize(
         extensions,

@@ -1,14 +1,8 @@
 from __future__ import annotations
-
 from dataclasses import dataclass, field
-
-
 @dataclass(frozen=True)
 class RuntimeConfig:
-    # dual_sim | left_real | right_real
-    mode: str = "dual_sim"
-
-
+    mode: str = "dual_sim"  # dual_sim | left_real | right_real
 @dataclass(frozen=True)
 class PoseInputConfig:
     node_name: str = "analytic_control"
@@ -16,26 +10,18 @@ class PoseInputConfig:
     tracked_topic: str = "/read_pose/tracked"
     max_pose_age_s: float = 0.25
     disconnect_s: float = 0.5
-
-
 @dataclass(frozen=True)
 class FrameTransformConfig:
-    # All translations are meters. RPY tuples are degrees, ordered roll/pitch/yaw.
     translation_left_shoulder_to_left_arm_base_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
     rotation_left_shoulder_to_left_arm_base_rpy_deg: tuple[float, float, float] = (0.0, -90.0, 0.0)
     translation_right_shoulder_to_right_arm_base_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
     rotation_right_shoulder_to_right_arm_base_rpy_deg: tuple[float, float, float] = (0.0, -90.0, 180.0)
-
     translation_horizon_to_left_shoulder_m: tuple[float, float, float] = (-0.16, 0.0, 0.0)
     translation_horizon_to_right_shoulder_m: tuple[float, float, float] = (0.16, 0.0, 0.0)
-
     translation_controller_to_flange_m: tuple[float, float, float] = (0.0, -0.03, 0.065)
     rotation_controller_to_flange_rpy_deg: tuple[float, float, float] = (0.0, -180.0, 90.0)
-
     human_size_m: float = 1.0
     robot_size_m: float = 1.4
-
-
 @dataclass(frozen=True)
 class IkConfig:
     urdf_path: str = "nero_urdf/nero.urdf"
@@ -53,87 +39,39 @@ class IkConfig:
     reach_min_ratio: float = 1.05
     enable_initial_global_search: bool = True
     enable_global_fallback: bool = False
-
-
-@dataclass(frozen=True)
-class OneEuroConfig:
-    enabled: bool = True
-    min_cutoff: float = 1.0
-    beta: float = 0.02
-    d_cutoff: float = 1.0
-
-
 @dataclass(frozen=True)
 class InputLimiterConfig:
-    enabled: bool = True
     max_linear_speed_m_s: float = 1.0
     max_angular_speed_rad_s: float = 4.0
     max_position_step_m: float = 0.04
     max_rotation_step_rad: float = 0.16
-
-
-@dataclass(frozen=True)
-class FilterConfig:
-    pose: OneEuroConfig = field(default_factory=lambda: OneEuroConfig(enabled=True, min_cutoff=1.2, beta=0.03, d_cutoff=1.0))
-    input_limit: InputLimiterConfig = field(default_factory=InputLimiterConfig)
-
-
 @dataclass(frozen=True)
 class MotionConfig:
-    # Online joint servo. It follows the newest IK target every tick while
-    # enforcing joint velocity, acceleration, and per-tick step limits.
     command_hz: float = 50.0
     max_joint_step_rad: float = 0.02
     max_velocity_rad_s: tuple[float, ...] = (0.8, 0.8, 1.0, 1.0, 1.2, 1.2, 1.2)
     max_acceleration_rad_s2: tuple[float, ...] = (2.0, 2.0, 2.5, 2.5, 3.0, 3.0, 3.0)
-    min_trajectory_duration_s: float = 0.2
-    max_trajectory_duration_s: float = 4.0
     joint_limit_margin_rad: float = 0.035
-
-
 @dataclass(frozen=True)
 class SimConfig:
     visual_z_offset_m: float = 0.6
-    show_horizon_frame: bool = True
-    horizon_frame_axis_length_m: float = 0.18
-
-
 @dataclass(frozen=True)
 class RealArmConfig:
     sdk_path: str = "third_party/pyAgxArm"
     interface: str = "socketcan"
     channel: str = "can0"
     bitrate: int = 1_000_000
-    firmware: str = "auto"
     speed_percent: int = 20
     startup_timeout_s: float = 3.0
     enable_timeout_s: float = 5.0
-    can_send_timeout_s: float = 0.05
-    can_frame_interval_s: float = 0.005
     sdk_joint_limits_enabled: bool = False
-    move_to_startup_pose: bool = True
-    require_enter_before_startup_move: bool = True
-    startup_pose_rad: tuple[float, ...] = (-1.410645, 1.676232, -1.185393, 1.719429, -0.698777, -0.164131, -0.350829)
-    startup_pose_tolerance_rad: float = 0.017453293
-
-
-@dataclass(frozen=True)
-class LogConfig:
-    enable_file_log: bool = True
-    directory: str = "logs"
-    filename: str = "analytic_control.log"
-    max_bytes: int = 2_000_000
-    backup_count: int = 3
-
-
 @dataclass(frozen=True)
 class ControlConfig:
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     pose_input: PoseInputConfig = field(default_factory=PoseInputConfig)
     frames: FrameTransformConfig = field(default_factory=FrameTransformConfig)
     ik: IkConfig = field(default_factory=IkConfig)
-    filters: FilterConfig = field(default_factory=FilterConfig)
+    input_limit: InputLimiterConfig = field(default_factory=InputLimiterConfig)
     motion: MotionConfig = field(default_factory=MotionConfig)
     sim: SimConfig = field(default_factory=SimConfig)
     real: RealArmConfig = field(default_factory=RealArmConfig)
-    log: LogConfig = field(default_factory=LogConfig)

@@ -11,21 +11,16 @@
 import math
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
-
 import numpy as np
 cimport numpy as np
-
 cdef double PI = math.pi
 cdef double TWO_PI = 2.0 * math.pi
-
 # ── C-level 4×4 matrix helpers (double[16], row-major) ──────────────
-
 cdef inline void _mat4_eye(double* o):
     o[0]=1; o[1]=0; o[2]=0; o[3]=0
     o[4]=0; o[5]=1; o[6]=0; o[7]=0
     o[8]=0; o[9]=0; o[10]=1; o[11]=0
     o[12]=0; o[13]=0; o[14]=0; o[15]=1
-
 cdef void _mat4_mul(double* A, double* B, double* o):
     cdef double t[16]
     t[0]=A[0]*B[0]+A[1]*B[4]+A[2]*B[8]+A[3]*B[12]
@@ -47,7 +42,6 @@ cdef void _mat4_mul(double* A, double* B, double* o):
     cdef int i
     for i in range(16):
         o[i] = t[i]
-
 cdef inline void _dh_A_into(double theta, double d, double a_prev, double alpha_prev, double* o):
     cdef double ca = math.cos(alpha_prev)
     cdef double sa = math.sin(alpha_prev)
@@ -57,7 +51,6 @@ cdef inline void _dh_A_into(double theta, double d, double a_prev, double alpha_
     o[4]=ca*st;   o[5]=ca*ct;   o[6]=-sa;    o[7]=-sa*d
     o[8]=sa*st;   o[9]=sa*ct;   o[10]=ca;    o[11]=ca*d
     o[12]=0.0;    o[13]=0.0;    o[14]=0.0;   o[15]=1.0
-
 cdef inline void _invert_rigid_into(double* T, double* o):
     o[0]=T[0]; o[1]=T[4]; o[2]=T[8]
     o[4]=T[1]; o[5]=T[5]; o[6]=T[9]
@@ -66,24 +59,19 @@ cdef inline void _invert_rigid_into(double* T, double* o):
     o[7]=-(o[4]*T[3]+o[5]*T[7]+o[6]*T[11])
     o[11]=-(o[8]*T[3]+o[9]*T[7]+o[10]*T[11])
     o[12]=0.0; o[13]=0.0; o[14]=0.0; o[15]=1.0
-
 cdef inline void _np4_to_c(np.ndarray src, double* dst):
     dst[0]=src[0,0]; dst[1]=src[0,1]; dst[2]=src[0,2]; dst[3]=src[0,3]
     dst[4]=src[1,0]; dst[5]=src[1,1]; dst[6]=src[1,2]; dst[7]=src[1,3]
     dst[8]=src[2,0]; dst[9]=src[2,1]; dst[10]=src[2,2]; dst[11]=src[2,3]
     dst[12]=src[3,0]; dst[13]=src[3,1]; dst[14]=src[3,2]; dst[15]=src[3,3]
-
 cdef inline void _c_to_np4(double* src, np.ndarray dst):
     dst[0,0]=src[0]; dst[0,1]=src[1]; dst[0,2]=src[2]; dst[0,3]=src[3]
     dst[1,0]=src[4]; dst[1,1]=src[5]; dst[1,2]=src[6]; dst[1,3]=src[7]
     dst[2,0]=src[8]; dst[2,1]=src[9]; dst[2,2]=src[10]; dst[2,3]=src[11]
     dst[3,0]=src[12]; dst[3,1]=src[13]; dst[3,2]=src[14]; dst[3,3]=src[15]
-
 # ── Scalar helpers for dedup and scoring ────────────────────────────
-
 cdef inline double _wrap_to_pi_scalar(double x):
     return (x + PI) % TWO_PI - PI
-
 cdef bint _is_duplicate(np.ndarray q, list unique_sols):
     cdef int i, j, n = len(unique_sols)
     cdef np.ndarray u
@@ -99,7 +87,6 @@ cdef bint _is_duplicate(np.ndarray q, list unique_sols):
         if d < 1e-8:
             return True
     return False
-
 cdef double _wrap_diff_norm7(np.ndarray a, np.ndarray b):
     cdef double s = 0.0, d
     cdef int i
@@ -109,7 +96,6 @@ cdef double _wrap_diff_norm7(np.ndarray a, np.ndarray b):
         elif d < -PI: d += TWO_PI
         s += d * d
     return math.sqrt(s)
-
 cdef double _wrap_diff_max_abs7(np.ndarray a, np.ndarray b):
     cdef double max_abs = 0.0, d
     cdef int i
@@ -121,7 +107,6 @@ cdef double _wrap_diff_max_abs7(np.ndarray a, np.ndarray b):
         if d > max_abs:
             max_abs = d
     return max_abs
-
 cdef double _wrap_diff_norm7_2prev(np.ndarray q, np.ndarray q_prev, np.ndarray q_prev2):
     cdef double s = 0.0, d
     cdef int i
@@ -131,7 +116,6 @@ cdef double _wrap_diff_norm7_2prev(np.ndarray q, np.ndarray q_prev, np.ndarray q
         elif d < -PI: d += TWO_PI
         s += d * d
     return math.sqrt(s)
-
 cdef double _pose_error_norm(np.ndarray T_cur, np.ndarray T_des):
     cdef double dpx = T_cur[0,3]-T_des[0,3]
     cdef double dpy = T_cur[1,3]-T_des[1,3]
@@ -146,20 +130,6 @@ cdef double _pose_error_norm(np.ndarray T_cur, np.ndarray T_des):
         +(T_cur[0,1]*T_des[1,1]-T_cur[1,1]*T_des[0,1])
         +(T_cur[0,2]*T_des[1,2]-T_cur[1,2]*T_des[0,2]))
     return math.sqrt(dpx*dpx+dpy*dpy+dpz*dpz+rex*rex+rey*rey+rez*rez)
-
-
-cdef inline np.ndarray _rotz(double t):
-    cdef double c = math.cos(t)
-    cdef double s = math.sin(t)
-    return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]], dtype=float)
-
-
-cdef inline np.ndarray _rotx(double t):
-    cdef double c = math.cos(t)
-    cdef double s = math.sin(t)
-    return np.array([[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]], dtype=float)
-
-
 @dataclass
 class NeroParams:
     # Keep this exactly as paper-style DH used for NERO experiments here.
@@ -171,7 +141,6 @@ class NeroParams:
     post_transform_d8: float
     theta0_coarse_divisor: int
     theta0_fine_count: int
-
     @staticmethod
     def default() -> "NeroParams":
         return NeroParams(
@@ -201,8 +170,6 @@ class NeroParams:
             theta0_coarse_divisor=3,
             theta0_fine_count=41,
         )
-
-
 @dataclass
 class ContinuityParams:
     # Local theta0 tracking window around previous selected theta0.
@@ -219,17 +186,12 @@ class ContinuityParams:
     # Initial global scan acquires the first branch; fallback controls later reacquire.
     enable_initial_global_search: bool = True
     enable_global_fallback: bool = True
-
-
 @dataclass
 class ContinuityRuntimeState:
     q_prev: np.ndarray
     q_prev2: Optional[np.ndarray] = None
     theta0_prev: Optional[float] = None
     branch_prev: Optional[Tuple[int, int, int]] = None
-
-
-
 cpdef np.ndarray fk(np.ndarray q, object p=None):
     if p is None:
         p = NeroParams.default()
@@ -252,8 +214,6 @@ cpdef np.ndarray fk(np.ndarray q, object p=None):
     cdef np.ndarray result = np.empty((4, 4), dtype=float)
     _c_to_np4(Tc, result)
     return result
-
-
 cdef list _solve_q123_c(double Ex, double Ey, double Ez,
                          double Wx, double Wy, double Wz,
                          double q4, double d0, double d2, double d4):
@@ -267,7 +227,6 @@ cdef list _solve_q123_c(double Ex, double Ey, double Ez,
     cdef double s2_abs = math.sqrt(max(0.0, 1.0 - c2 * c2))
     if rho > abs(d2) + 1e-7:
         return []
-
     cdef double vx = Wx - Ex, vy = Wy - Ey, vz = Wz - Ez
     cdef double n_v = math.sqrt(vx*vx + vy*vy + vz*vz)
     if n_v < 1e-10:
@@ -276,11 +235,9 @@ cdef list _solve_q123_c(double Ex, double Ey, double Ez,
     cdef double n_col = math.sqrt(u1*u1 + u2*u2 + u3*u3)
     if n_col < 1e-12: n_col = 1e-12
     u1 /= n_col; u2 /= n_col; u3 /= n_col
-
     cdef double s4 = math.sin(q4), c4 = math.cos(q4)
     if abs(s4) < 1e-8:
         return []
-
     cdef double s2, c1, s1, n1, q1, q2, b1, b2, s3, c2c3, c3, n3
     for s2 in (s2_abs, -s2_abs):
         if abs(s2) < 1e-10:
@@ -307,8 +264,6 @@ cdef list _solve_q123_c(double Ex, double Ey, double Ez,
         s3 /= n3; c3 /= n3
         sols.append((q1, q2, math.atan2(s3, c3), 1.0 if s2 > 0.0 else -1.0))
     return sols
-
-
 cdef list _extract_567_c(double* T47):
     cdef list sols = []
     cdef double c6 = T47[6]
@@ -328,9 +283,6 @@ cdef list _extract_567_c(double* T47):
         th7 = math.atan2(T47[5] / s6, -T47[4] / s6)
         sols.append((th5, th6, th7, sgn))
     return sols
-
-
-
 def _weight_limits(q: float, q_min: float, q_max: float) -> float:
     """清华论文式(20)：越靠近限位，权重越大。"""
     span = q_max - q_min
@@ -352,8 +304,6 @@ def _weight_limits(q: float, q_min: float, q_max: float) -> float:
     if abs(den) < 1e-12:
         return 1e6
     return -b * x / den
-
-
 cdef double _joint_limit_cost(np.ndarray q, np.ndarray joint_limits):
     cdef double total = 0.0
     cdef double q_min, q_max, span, mid, x, edge
@@ -374,16 +324,10 @@ cdef double _joint_limit_cost(np.ndarray q, np.ndarray joint_limits):
         edge = 1.0 - abs(x) + 1e-6
         total += (x * x) / (edge * edge)
     return total / 7.0
-
-
-
 def _candidate_branch(np.ndarray cand):
     if cand.shape[0] < 20:
         return None
     return (int(cand[17]), int(cand[18]), int(cand[19]))
-
-
-
 def _scan_theta0_solutions(
     T07: np.ndarray, p: NeroParams, step: float
 ) -> Tuple[List[float], List[Tuple[float, List[np.ndarray]]]]:
@@ -401,8 +345,6 @@ def _scan_theta0_solutions(
             feasible_theta0.append(t)
             cached.append((t, sols))
     return feasible_theta0, cached
-
-
 def _best_weighted_from_cached(
     cached: List[Tuple[float, List[np.ndarray]]], p: NeroParams, q_prev: np.ndarray
 ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[float]]:
@@ -429,12 +371,9 @@ def _best_weighted_from_cached(
                 q_best_full = q_full
                 theta0_best = t
     return q_best, q_best_full, theta0_best
-
-
 cpdef list _ik_one_arm_angle(np.ndarray T07_np, double theta0, object p):
     cdef double T07[16], T_chain[16], T04[16], T_dh[16], T_inv[16], T47[16]
     _np4_to_c(T07_np, T07)
-
     # Extract params once
     cdef double d0 = p.d_i[0], d2 = p.d_i[2], d4 = p.d_i[4]
     cdef double d6 = p.d_i[6], d8 = p.post_transform_d8
@@ -445,13 +384,11 @@ cpdef list _ik_one_arm_angle(np.ndarray T07_np, double theta0, object p):
     cdef np.ndarray joint_limits = p.joint_limits
     cdef double to0=theta_offset_np[0], to1=theta_offset_np[1], to2=theta_offset_np[2]
     cdef double to3=theta_offset_np[3], to4=theta_offset_np[4], to5=theta_offset_np[5], to6=theta_offset_np[6]
-
     # S, W, q4_abs from C-array T07 (no numpy allocation)
     cdef double z7x=T07[2], z7y=T07[6], z7z=T07[10]
     cdef double O7x=T07[3]-d8*z7x, O7y=T07[7]-d8*z7y, O7z=T07[11]-d8*z7z
     cdef double Wx=O7x-d6*z7x, Wy=O7y-d6*z7y, Wz=O7z-d6*z7z
     cdef double Sx=0.0, Sy=0.0, Sz=d0
-
     cdef double dx=Wx-Sx, dy=Wy-Sy, dz=Wz-Sz
     cdef double l_sw=math.sqrt(dx*dx+dy*dy+dz*dz)
     cdef double l_se=abs(d2), l_ew=abs(d4)
@@ -463,7 +400,6 @@ cpdef list _ik_one_arm_angle(np.ndarray T07_np, double theta0, object p):
     if c4v < -1.0: c4v = -1.0
     elif c4v > 1.0: c4v = 1.0
     cdef double q4_abs=math.acos(c4v)
-
     # Elbow E from theta0 (scalar, no numpy)
     cdef double usx=dx/l_sw, usy=dy/l_sw, usz=dz/l_sw
     cdef double xv=(l_se*l_se-l_ew*l_ew+l_sw*l_sw)/(2.0*l_sw)
@@ -488,7 +424,6 @@ cpdef list _ik_one_arm_angle(np.ndarray T07_np, double theta0, object p):
     cdef double Ex=Cx+rv*(ct*e1x+st*e2x)
     cdef double Ey=Cy+rv*(ct*e1y+st*e2y)
     cdef double Ez=Cz+rv*(ct*e1z+st*e2z)
-
     # T_chain = remove_post_transform(T07) in C
     cdef int i
     for i in range(16):
@@ -496,7 +431,6 @@ cpdef list _ik_one_arm_angle(np.ndarray T07_np, double theta0, object p):
     T_chain[3]  -= d8 * T_chain[2]
     T_chain[7]  -= d8 * T_chain[6]
     T_chain[11] -= d8 * T_chain[10]
-
     cdef list q_solutions = []
     cdef double q4, th1, th2, th3, th4, th5, th6, th7, elbow_sign, shoulder_sign, wrist_sign
     cdef list q123_sols, th567_sols
@@ -504,7 +438,6 @@ cpdef list _ik_one_arm_angle(np.ndarray T07_np, double theta0, object p):
     cdef bint ok
     cdef int j
     cdef np.ndarray q_np, extra_np
-
     for elbow_sign in (1.0, -1.0):
         q4 = elbow_sign * q4_abs
         q123_sols = _solve_q123_c(Ex, Ey, Ez, Wx, Wy, Wz, q4, d0, d2, d4)
@@ -514,7 +447,6 @@ cpdef list _ik_one_arm_angle(np.ndarray T07_np, double theta0, object p):
             th3 = q123[2] + to2
             shoulder_sign = q123[3]
             th4 = q4 + to3
-
             _dh_A_into(th1, d_i[0], a_prev[0], alpha_prev[0], T04)
             _dh_A_into(th2, d_i[1], a_prev[1], alpha_prev[1], T_dh)
             _mat4_mul(T04, T_dh, T04)
@@ -522,10 +454,8 @@ cpdef list _ik_one_arm_angle(np.ndarray T07_np, double theta0, object p):
             _mat4_mul(T04, T_dh, T04)
             _dh_A_into(th4, d_i[3], a_prev[3], alpha_prev[3], T_dh)
             _mat4_mul(T04, T_dh, T04)
-
             _invert_rigid_into(T04, T_inv)
             _mat4_mul(T_inv, T_chain, T47)
-
             for th567 in _extract_567_c(T47):
                 th5 = th567[0]; th6 = th567[1]; th7 = th567[2]; wrist_sign = th567[3]
                 q_np = np.array([
@@ -553,8 +483,6 @@ cpdef list _ik_one_arm_angle(np.ndarray T07_np, double theta0, object p):
                 ], dtype=float)
                 q_solutions.append(np.concatenate([q_np, extra_np]))
     return q_solutions
-
-
 def _collect_unique_solutions_for_theta0_grid(
     T: np.ndarray, p: NeroParams, theta0_grid: np.ndarray
 ) -> List[np.ndarray]:
@@ -569,8 +497,6 @@ def _collect_unique_solutions_for_theta0_grid(
         if not _is_duplicate(q, unique_solutions):
             unique_solutions.append(q)
     return unique_solutions
-
-
 def _global_ik_search(
     T_target: np.ndarray,
     p: Optional[NeroParams] = None,
@@ -581,21 +507,16 @@ def _global_ik_search(
         p = NeroParams.default()
     if q_prev is None:
         q_prev = np.zeros(7, dtype=float)
-
     T = np.array(T_target, dtype=float)
     step = min(0.01, 2.0 * math.pi / max(1, n_psi))
     feasible_theta0, cached = _scan_theta0_solutions(T, p, step=step)
     if not feasible_theta0:
         return None, []
-
     q_best, _q_best_full, _best_t0 = _best_weighted_from_cached(cached, p, q_prev)
     all_solutions = []
     for _theta0, sols in cached:
         all_solutions.extend(sols)
     return q_best, all_solutions
-
-
-
 def solve_pose_continuous_with_state(
     T_target: np.ndarray,
     state: ContinuityRuntimeState,
@@ -607,13 +528,11 @@ def solve_pose_continuous_with_state(
         p = NeroParams.default()
     if continuity is None:
         continuity = ContinuityParams()
-
     T = np.array(T_target, dtype=float)
     q_prev = state.q_prev
     q_prev2 = state.q_prev2
     theta0_prev = state.theta0_prev
     branch_prev = state.branch_prev
-
     all_solutions: List[np.ndarray] = []
     search_scope = "local"
     if theta0_prev is not None:
@@ -624,7 +543,6 @@ def solve_pose_continuous_with_state(
             endpoint=True,
         )
         all_solutions = _collect_unique_solutions_for_theta0_grid(T, p, theta0_grid)
-
     allow_global = (theta0_prev is None and continuity.enable_initial_global_search) or (
         theta0_prev is not None and continuity.enable_global_fallback
     )
@@ -633,7 +551,6 @@ def solve_pose_continuous_with_state(
         search_scope = "global"
     if not all_solutions:
         return None, {}, state
-
     scored = []
     for cand in all_solutions:
         q = cand[:7]
@@ -651,14 +568,12 @@ def solve_pose_continuous_with_state(
             + continuity.w_limit * limit_cost
         )
         scored.append((score, cand))
-
     scored.sort(key=lambda item: item[0])
     best_any = scored[0]
     selected = best_any
     same_branch_scored = []
     if branch_prev is not None:
         same_branch_scored = [item for item in scored if _candidate_branch(item[1]) == branch_prev]
-
     if branch_prev is not None and search_scope != "global":
         if same_branch_scored:
             best_same = same_branch_scored[0]
@@ -677,7 +592,6 @@ def solve_pose_continuous_with_state(
                 selected = best_any
             else:
                 return None, {}, state
-
     q_best_full = selected[1]
     q_best = q_best_full[:7]
     theta0_best = float(q_best_full[7]) if q_best_full.shape[0] > 7 else None
