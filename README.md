@@ -20,6 +20,19 @@ The pose input publisher must publish:
 /read_pose/tracked    std_msgs/UInt8MultiArray
 ```
 
+The control node publishes lightweight telemetry on eight topics:
+
+```text
+/analytic_control/left/current_joints    std_msgs/Float64MultiArray
+/analytic_control/left/target_joints     std_msgs/Float64MultiArray
+/analytic_control/left/current_pose      geometry_msgs/PoseStamped
+/analytic_control/left/target_pose       geometry_msgs/PoseStamped
+/analytic_control/right/current_joints   std_msgs/Float64MultiArray
+/analytic_control/right/target_joints    std_msgs/Float64MultiArray
+/analytic_control/right/current_pose     geometry_msgs/PoseStamped
+/analytic_control/right/target_pose      geometry_msgs/PoseStamped
+```
+
 ## Build IK
 
 ```bash
@@ -68,7 +81,7 @@ The loop is intentionally small: optional left-arm startup pose -> ROS pose inpu
 - `run.py`: entry point and stdout logger
 - `config.py`: runtime configuration
 - `control_loop.py`: teleoperation loop
-- `pose_io.py`: ROS pose subscribers
+- `pose_io.py`: ROS pose subscribers and telemetry publishers
 - `frames.py`: controller-to-arm frame transforms
 - `ik.py`: Nero IK wrapper and URDF loader
 - `ik_solver.pyx`: Cython analytic IK solver

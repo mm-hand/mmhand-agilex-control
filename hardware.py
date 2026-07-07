@@ -110,7 +110,12 @@ class RealArmBackend:
         self.q_feedback = np.asarray(feedback, dtype=float).reshape(7) if feedback is not None else q.copy()
         self._set_servo_mode()
         self.last_sent_q = self.q_feedback.copy()
+    def refresh_feedback(self) -> None:
+        feedback = read_joint_angles_optional(self.robot)
+        if feedback is not None:
+            self.q_feedback = np.asarray(feedback, dtype=float).reshape(7)
     def update(self, left_q: np.ndarray | None, right_q: np.ndarray | None, frames: CoordinateFrames, status: str, dt: float) -> None:
+        self.refresh_feedback()
         q = left_q if self.side == "left" else right_q
         if q is None:
             return

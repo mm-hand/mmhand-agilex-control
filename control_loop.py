@@ -24,6 +24,10 @@ def _motion_step(planner: ArmMotionPlanner, target: np.ndarray | None, now: floa
         planner.step(None, now)
         return None
     return planner.step(target, now)
+def _flange_in_horizon(ik: NeroIK, horizon_to_arm_base: np.ndarray, q: np.ndarray | None) -> np.ndarray | None:
+    if q is None:
+        return None
+    return horizon_to_arm_base @ ik.fk_flange(q)
 def run_control(config: ControlConfig, logger: logging.Logger) -> int:
     pose_input = PoseInputSubscriber(config.pose_input)
     backend = None
@@ -31,10 +35,10 @@ def run_control(config: ControlConfig, logger: logging.Logger) -> int:
         left_ik = NeroIK(config.ik)
         right_ik = NeroIK(config.ik)
         real_side = _real_side(config.runtime.mode)
+        bases = arm_base_in_horizon(config.frames)
         if real_side is None:
             if config.startup.enable_sim_pose:
                 left_ik.reset_state(_startup_pose(config))
-            bases = arm_base_in_horizon(config.frames)
             backend = SwiftSimBackend(left_ik.robot, right_ik.robot, bases, config.sim, logger)
             left_start = left_ik.robot.q.copy()
             right_start = right_ik.robot.q.copy()
@@ -87,6 +91,22 @@ def run_control(config: ControlConfig, logger: logging.Logger) -> int:
                 logger.info(status)
                 last_status = status
             backend.update(left_q, right_q, frames, status, dt)
+            if real_side is None:
+                left_current_q = left_ik.robot.q.copy() if use_left else None
+                right_current_q = right_ik.robot.q.copy() if use_right else None
+            else:
+                left_current_q = backend.q_feedback.copy() if real_side == "left" else None
+                right_current_q = backend.q_feedback.copy() if real_side == "right" else None
+            pose_input.publish_telemetry(
+                left_current_q,
+                left_q if use_left else None,
+                _flange_in_horizon(left_ik, bases.left, left_current_q),
+                _flange_in_horizon(left_ik, bases.left, left_q if use_left else None),
+                right_current_q,
+                right_q if use_right else None,
+                _flange_in_horizon(right_ik, bases.right, right_current_q),
+                _flange_in_horizon(right_ik, bases.right, right_q if use_right else None),
+            )
             elapsed = time.monotonic() - tick_start
             time.sleep(max(0.0, dt - elapsed))
     except KeyboardInterrupt:

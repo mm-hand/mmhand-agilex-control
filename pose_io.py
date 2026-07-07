@@ -1,12 +1,14 @@
 from __future__ import annotations
 import time
+import numpy as np
 import rclpy
-from geometry_msgs.msg import PoseArray
+from geometry_msgs.msg import PoseArray, PoseStamped
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.qos import qos_profile_sensor_data
-from std_msgs.msg import UInt8MultiArray
+from std_msgs.msg import Float64MultiArray, UInt8MultiArray
 from config import PoseInputConfig
 from frames import ControllerPose
+from transforms import quat_xyzw_from_rotation_matrix
 class PoseInputSubscriber:
     def __init__(self, config: PoseInputConfig) -> None:
         self.context = rclpy.Context()
@@ -25,6 +27,14 @@ class PoseInputSubscriber:
         self.node.create_subscription(
             UInt8MultiArray, config.tracked_topic, self._on_tracked, qos_profile_sensor_data
         )
+        self.left_current_joints = self.node.create_publisher(Float64MultiArray, "/analytic_control/left/current_joints", qos_profile_sensor_data)
+        self.left_target_joints = self.node.create_publisher(Float64MultiArray, "/analytic_control/left/target_joints", qos_profile_sensor_data)
+        self.left_current_pose = self.node.create_publisher(PoseStamped, "/analytic_control/left/current_pose", qos_profile_sensor_data)
+        self.left_target_pose = self.node.create_publisher(PoseStamped, "/analytic_control/left/target_pose", qos_profile_sensor_data)
+        self.right_current_joints = self.node.create_publisher(Float64MultiArray, "/analytic_control/right/current_joints", qos_profile_sensor_data)
+        self.right_target_joints = self.node.create_publisher(Float64MultiArray, "/analytic_control/right/target_joints", qos_profile_sensor_data)
+        self.right_current_pose = self.node.create_publisher(PoseStamped, "/analytic_control/right/current_pose", qos_profile_sensor_data)
+        self.right_target_pose = self.node.create_publisher(PoseStamped, "/analytic_control/right/target_pose", qos_profile_sensor_data)
     def _on_poses(self, msg: PoseArray) -> None:
         now = time.monotonic()
         self.last_poses_at = now
@@ -56,6 +66,48 @@ class PoseInputSubscriber:
         return self._fresh(self.left)
     def get_right(self) -> ControllerPose | None:
         return self._fresh(self.right)
+    def publish_telemetry(
+        self,
+        left_current_q: np.ndarray | None,
+        left_target_q: np.ndarray | None,
+        left_current_pose: np.ndarray | None,
+        left_target_pose: np.ndarray | None,
+        right_current_q: np.ndarray | None,
+        right_target_q: np.ndarray | None,
+        right_current_pose: np.ndarray | None,
+        right_target_pose: np.ndarray | None,
+    ) -> None:
+        if not self.context.ok():
+            return
+        stamp = self.node.get_clock().now().to_msg()
+        self._publish_joints(self.left_current_joints, left_current_q)
+        self._publish_joints(self.left_target_joints, left_target_q)
+        self._publish_pose(self.left_current_pose, left_current_pose, stamp)
+        self._publish_pose(self.left_target_pose, left_target_pose, stamp)
+        self._publish_joints(self.right_current_joints, right_current_q)
+        self._publish_joints(self.right_target_joints, right_target_q)
+        self._publish_pose(self.right_current_pose, right_current_pose, stamp)
+        self._publish_pose(self.right_target_pose, right_target_pose, stamp)
+    def _publish_joints(self, publisher, q: np.ndarray | None) -> None:
+        if q is None:
+            return
+        publisher.publish(Float64MultiArray(data=[float(v) for v in np.asarray(q, dtype=float).reshape(7)]))
+    def _publish_pose(self, publisher, transform: np.ndarray | None, stamp) -> None:
+        if transform is None:
+            return
+        transform = np.asarray(transform, dtype=float).reshape(4, 4)
+        quat = quat_xyzw_from_rotation_matrix(transform[:3, :3])
+        msg = PoseStamped()
+        msg.header.stamp = stamp
+        msg.header.frame_id = "pose_input_horizon"
+        msg.pose.position.x = float(transform[0, 3])
+        msg.pose.position.y = float(transform[1, 3])
+        msg.pose.position.z = float(transform[2, 3])
+        msg.pose.orientation.x = float(quat[0])
+        msg.pose.orientation.y = float(quat[1])
+        msg.pose.orientation.z = float(quat[2])
+        msg.pose.orientation.w = float(quat[3])
+        publisher.publish(msg)
     def close(self) -> None:
         self.node.destroy_node()
         if self.context.ok():

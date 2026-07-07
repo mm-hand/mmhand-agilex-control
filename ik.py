@@ -38,6 +38,9 @@ class NeroIK:
         q = np.asarray(q, dtype=float).reshape(7)
         self.robot.q = q.copy()
         self._state = ContinuityRuntimeState(q_prev=q.copy())
+    def fk_flange(self, q: np.ndarray) -> np.ndarray:
+        q = np.asarray(q, dtype=float).reshape(7)
+        return (self.robot.fkine(q, end="link7").A @ _T_LINK7_TO_FLANGE).copy()
     def solve(self, transform_arm_base_to_flange: np.ndarray) -> np.ndarray | None:
         q, _report, self._state = solve_pose_continuous_with_state(
             self._clamp_target_reach(transform_arm_base_to_flange @ _T_FLANGE_TO_LINK7),
