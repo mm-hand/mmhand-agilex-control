@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 from config import MotionConfig, RealArmConfig
 from frames import CoordinateFrames
+from motion import ArmMotionPlanner, angle_diff
 def _sdk(config: RealArmConfig):
     sdk_path = Path(config.sdk_path)
     if not sdk_path.is_absolute():
@@ -102,14 +103,21 @@ class RealArmBackend:
         if hasattr(self.robot, "set_auto_set_motion_mode_enabled"):
             self.robot.set_auto_set_motion_mode_enabled(False)
     def move_j_startup(self, q: np.ndarray) -> None:
-        q = validate_joint_command(q)
-        if hasattr(self.robot, "set_motion_mode"):
-            self.robot.set_motion_mode("j")
-        self.robot.move_j([float(v) for v in q])
-        feedback = read_joint_angles_optional(self.robot)
-        self.q_feedback = np.asarray(feedback, dtype=float).reshape(7) if feedback is not None else q.copy()
+        target = validate_joint_command(q)
         self._set_servo_mode()
-        self.last_sent_q = self.q_feedback.copy()
+        planner = ArmMotionPlanner(self.motion_config, self.q_feedback.copy())
+        dt = 1.0 / self.motion_config.command_hz
+        while np.max(np.abs(angle_diff(target, planner.q))) > 0.01:
+            q_cmd = planner.step(target, time.monotonic())
+            self.robot.move_js([float(v) for v in q_cmd])
+            self.last_sent_q = q_cmd.copy()
+            time.sleep(dt)
+            self.refresh_feedback()
+        self.robot.move_js([float(v) for v in target])
+        self.last_sent_q = target.copy()
+        time.sleep(dt)
+        feedback = read_joint_angles_optional(self.robot)
+        self.q_feedback = np.asarray(feedback, dtype=float).reshape(7) if feedback is not None else target.copy()
     def refresh_feedback(self) -> None:
         feedback = read_joint_angles_optional(self.robot)
         if feedback is not None:

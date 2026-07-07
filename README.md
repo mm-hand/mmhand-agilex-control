@@ -144,8 +144,8 @@ cd /home/collin/github/mm-hand/analytic_control
 .venv/bin/python run.py
 ```
 
-Real hardware first moves to the startup pose with `move_j`, then waits for
-Enter before teleoperation starts. Teleoperation commands use `move_js`.
+Real hardware first moves to the startup pose with rate-limited `move_js`, then waits for
+Enter before teleoperation starts. Teleoperation commands also use `move_js`.
 
 ## ROS 2 topics
 
