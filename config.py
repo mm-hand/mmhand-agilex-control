@@ -21,7 +21,7 @@ class FrameTransformConfig:
     translation_controller_to_flange_m: tuple[float, float, float] = (0.0, -0.03, 0.065)
     rotation_controller_to_flange_rpy_deg: tuple[float, float, float] = (0.0, -180.0, 90.0)
     human_size_m: float = 1.0
-    robot_size_m: float = 1.4
+    robot_size_m: float = 1.45
 @dataclass(frozen=True)
 class IkConfig:
     urdf_path: str = "nero_urdf/nero.urdf"
