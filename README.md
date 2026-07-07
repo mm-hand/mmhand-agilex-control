@@ -66,7 +66,7 @@ PoseInputConfig.poses_topic    /read_pose/poses
 PoseInputConfig.tracked_topic  /read_pose/tracked
 RealArmConfig.sdk_path         pyAgxArm SDK path
 RealArmConfig.channel          SocketCAN channel, usually can0
-StartupConfig.enable_real_move_j false by default
+StartupConfig.enable_real_move_j true by default
 ```
 
 Current default mode is `left_real`, so `run.py` connects to the left real arm
@@ -144,8 +144,8 @@ cd /home/collin/github/mm-hand/analytic_control
 .venv/bin/python run.py
 ```
 
-Real hardware is controlled with `move_js`. The optional startup `move_j` is
-disabled by default via `StartupConfig.enable_real_move_j = False`.
+Real hardware first moves to the startup pose with `move_j`, then waits for
+Enter before teleoperation starts. Teleoperation commands use `move_js`.
 
 ## ROS 2 topics
 

@@ -50,6 +50,7 @@ def run_control(config: ControlConfig, logger: logging.Logger) -> int:
             if real_side == "left":
                 if config.startup.enable_real_move_j:
                     backend.move_j_startup(_startup_pose(config))
+                    input("startup pose reached; press Enter to start teleop...")
                 left_start = backend.q_feedback.copy()
                 left_ik.reset_state(left_start)
             else:
