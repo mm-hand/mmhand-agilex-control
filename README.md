@@ -13,11 +13,12 @@ embedded `rclpy` node, following the lightweight pattern used by `read_pico`.
 
 ## Install dependencies
 
-Use the same ROS-enabled Python environment as `read_pico`. The repository also
-has a local `.venv` that is configured for this machine.
+Use the same ROS-enabled Python environment as `read_pico`. If you use a local
+virtual environment, create it outside git-tracked files or use `.venv`, which is
+ignored by git.
 
 ```bash
-cd /home/collin/github/mm-hand/analytic_control
+cd analytic_control
 
 # First-time setup, or after dependency changes.
 .venv/bin/python -m pip install -r requirements.txt
@@ -48,7 +49,7 @@ active. Mixing system ROS Python packages with conda packages can break imports.
 `ik_solver.pyx` must be compiled before running:
 
 ```bash
-cd /home/collin/github/mm-hand/analytic_control
+cd analytic_control
 .venv/bin/python setup.py build_ext --inplace
 ```
 
@@ -83,6 +84,29 @@ right_real  Subscribe to right PICO pose and send right-arm move_js commands.
 Simulation and real-arm teleoperation are selected by this single config value.
 They are not run in parallel.
 
+## Quick start
+
+From the `mm-hand` workspace, run `read_pico` in one terminal and
+`analytic_control` in another.
+
+Terminal 1, PICO pose publisher:
+
+```bash
+cd read_pico
+./run_ubuntu_ros.sh --vr-port 9100
+```
+
+Terminal 2, analytic control:
+
+```bash
+cd analytic_control
+.venv/bin/python setup.py build_ext --inplace
+.venv/bin/python run.py
+```
+
+In real-arm mode, the arm first moves to the startup pose with rate-limited
+`move_js`. Press Enter in the analytic-control terminal to begin teleoperation.
+
 ## Run simulation
 
 Set:
@@ -94,7 +118,7 @@ mode: str = "dual_sim"
 Then run:
 
 ```bash
-cd /home/collin/github/mm-hand/analytic_control
+cd analytic_control
 .venv/bin/python setup.py build_ext --inplace
 .venv/bin/python run.py
 ```
@@ -112,7 +136,7 @@ Simulation publishes the same ROS telemetry topics as real-arm mode.
 Start `read_pico` first so `/read_pose/*` is available:
 
 ```bash
-cd /home/collin/github/mm-hand/read_pico
+cd ../read_pico
 ./run_ubuntu_ros.sh --vr-port 9100
 ```
 
@@ -139,7 +163,7 @@ sudo ip link set can0 up
 Run analytic control:
 
 ```bash
-cd /home/collin/github/mm-hand/analytic_control
+cd analytic_control
 .venv/bin/python setup.py build_ext --inplace
 .venv/bin/python run.py
 ```
@@ -267,7 +291,6 @@ ros2 topic echo /analytic_control/left/current_pose --once
 Check Python imports and Cython build:
 
 ```bash
-cd /home/collin/github/mm-hand/analytic_control
 .venv/bin/python -m py_compile run.py control_loop.py pose_io.py ik.py hardware.py sim.py transforms.py
 .venv/bin/python setup.py build_ext --inplace
 ```
