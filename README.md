@@ -3,54 +3,115 @@
 Nero mechanical-arm analytic IK control for PICO pose teleoperation. It can
 run either dual-arm Swift simulation or teleoperate one real arm.
 
-## Install ROS environment
+## System prerequisites
 
-Install ADB for the companion `read_pico` PICO receiver:
+The supported baseline is Ubuntu 24.04 x86_64. Use Miniforge (recommended),
+Mambaforge, or Miniconda with a working `conda` command. Install the required
+Ubuntu tools:
 
 ```bash
-sudo apt install -y adb
+sudo apt update
+sudo apt install -y git adb build-essential
 ```
 
-Create the shared RoboStack Jazzy environment. `analytic_control` and
-`read_pico` use this same environment:
+`build-essential` provides the C/C++ toolchain used to compile `ik_solver.pyx`.
+The real-arm mode additionally requires a Linux SocketCAN-compatible adapter
+and driver that create `can0`. PICO teleoperation requires a PICO 4 Ultra with
+the supplied APK installed, USB debugging enabled, and ADB authorized. Swift
+simulation is viewed in a current desktop Chrome or Chromium browser.
+
+System ROS may remain installed, but do not source
+`/opt/ros/jazzy/setup.bash` in a terminal where `mmhand-ros` is active.
+
+## Clone the workspace
+
+`analytic_control` and `read_pico` are sibling repositories:
+
+```text
+mm-hand/
+|- analytic_control/
+`- read_pico/
+```
+
+Create the workspace and clone both repositories:
 
 ```bash
-conda create -y -n mmhand-ros --override-channels \
-  -c conda-forge -c robostack-jazzy \
-  python=3.12 \
-  ros-jazzy-ros-base \
-  ros-jazzy-geometry-msgs \
-  ros-jazzy-std-msgs \
-  ros-jazzy-rmw-cyclonedds-cpp \
-  numpy=1.26 \
-  scipy=1.13 \
-  cython \
-  setuptools \
-  wheel \
-  websockets=10.4 \
-  python-can \
-  pyusb \
-  roboticstoolbox-python=1.3.0 \
-  spatialmath-python=1.1.16 \
-  spatialgeometry=1.1.0 \
-  swift-sim=1.1.0
+mkdir -p ~/mm-hand
+cd ~/mm-hand
+git clone --recurse-submodules https://github.com/mm-hand/analytic_control.git
+git clone https://github.com/mm-hand/read_pico.git
+```
 
+## Create the ROS environment
+
+The dependency manifest is `environment.yml`. Create the shared RoboStack Jazzy
+environment once, then activate it:
+
+```bash
+cd ~/mm-hand/analytic_control
+conda env create -f environment.yml
 conda activate mmhand-ros
-export PYTHONNOUSERSITE=1
+conda env config vars list
 ```
 
-Do not source `/opt/ros/jazzy/setup.bash` while this Conda environment is
-active. `PYTHONNOUSERSITE=1` keeps both projects on the same Conda and ROS
-packages.
-
-## Prepare source
-
-Initialize the real-arm SDK after cloning:
+`environment.yml` sets `PYTHONNOUSERSITE=1` when the environment is activated,
+so no manual export is needed. After pulling dependency changes, update it with:
 
 ```bash
-cd analytic_control
+conda env update -f environment.yml --prune
+```
+
+## Prepare and build IK
+
+The clone command initializes the real-arm SDK submodule. To repair an existing
+clone or update submodules, run:
+
+```bash
+cd ~/mm-hand/analytic_control
 git submodule update --init --recursive
 ```
+
+Build the Cython IK extension before the first run and after changing
+`ik_solver.pyx`:
+
+```bash
+cd ~/mm-hand/analytic_control
+conda activate mmhand-ros
+python setup.py build_ext --inplace
+```
+
+## Verify installation
+
+Run these checks after the IK build:
+
+```bash
+python -c "import rclpy; print('ROS Python OK')"
+python -c "import roboticstoolbox as rtb; print(rtb.__version__)"
+python -c "import ik_solver; print(ik_solver.__file__)"
+```
+
+Expected result: all three commands exit successfully. The second prints
+`1.3.0`; the third prints a compiled `ik_solver` shared-library path.
+
+For real-arm work, verify the SocketCAN interface after configuring it:
+
+```bash
+ip -details link show can0
+```
+
+Expected result: `can0` exists, is `UP`, and reports `bitrate 1000000`.
+
+After starting `read_pico`, verify PICO ROS input:
+
+```bash
+ros2 topic list
+ros2 topic hz /read_pose/poses
+ros2 topic echo /read_pose/poses --once
+```
+
+Expected result: `/read_pose/poses` is listed, its rate is non-zero while PICO
+is running, and the echo prints a `geometry_msgs/PoseArray`. Stop `ros2 topic
+hz` with Ctrl-C after observing the rate.
 
 ## Configure mode
 
@@ -64,36 +125,29 @@ mode: str = "right_real"  # right real-arm teleoperation
 
 `RealArmConfig.sdk_path` defaults to `third_party/pyAgxArm`.
 
-## Build IK
-
-Run this before the first run and after changing `ik_solver.pyx`:
-
-```bash
-cd analytic_control
-conda activate mmhand-ros
-export PYTHONNOUSERSITE=1
-python setup.py build_ext --inplace
-```
-
 ## Run simulation
 
 Set `RuntimeConfig.mode` to `"dual_sim"`, then run:
 
 ```bash
-cd analytic_control
+cd ~/mm-hand/analytic_control
 conda activate mmhand-ros
-export PYTHONNOUSERSITE=1
 python run.py
 ```
 
-Open Swift at `http://localhost:52000`.
+Expected result:
+
+- The terminal starts without an import error and logs `swift ready`.
+- Swift is available at `http://localhost:52000`.
+- Both Nero robot models appear in the browser.
+- PICO controller motion updates the controller/flange axes and arm poses.
 
 ## Run real-arm teleoperation
 
-Start PICO pose publishing in one terminal from the `mm-hand` workspace:
+Start PICO pose publishing in one terminal:
 
 ```bash
-cd read_pico
+cd ~/mm-hand/read_pico
 ./run_ubuntu_ros.sh --vr-port 9100
 ```
 
@@ -101,9 +155,8 @@ Set `RuntimeConfig.mode` to `"left_real"` or `"right_real"`. In another
 terminal, configure CAN and start control:
 
 ```bash
-cd analytic_control
+cd ~/mm-hand/analytic_control
 conda activate mmhand-ros
-export PYTHONNOUSERSITE=1
 sudo ip link set can0 down
 sudo ip link set can0 type can bitrate 1000000
 sudo ip link set can0 up
@@ -113,6 +166,16 @@ python run.py
 The arm first moves to the configured startup pose with the normal joint speed
 limits. Press Enter in the analytic-control terminal only after that movement
 finishes to begin teleoperation.
+
+After the control loop starts, verify telemetry:
+
+```bash
+ros2 topic list | grep /analytic_control
+ros2 topic echo /analytic_control/left/current_joints --once
+```
+
+In `dual_sim`, both sides publish telemetry. In real-arm mode, the active arm
+publishes non-empty current and target data.
 
 ## IK overview
 
@@ -142,11 +205,12 @@ arm extension.
 ### Continuous teleoperation
 
 The first valid target uses a global arm-angle scan to acquire a feasible
-branch. Later targets search only near the previous `theta0`. Candidates are
-scored by joint change from the previous two commands, forward-kinematics pose
-error, arm-angle change, and proximity to joint limits. The previous branch is
-kept unless another branch improves the score enough and can be reached without
-a large joint jump.
+branch. Later targets search only near the previous `theta0`; global fallback
+is disabled by the default runtime configuration. Candidates are scored by joint
+change from the previous two commands, forward-kinematics pose error, arm-angle
+change, and proximity to joint limits. The previous branch is kept unless
+another branch improves the score enough and can be reached without a large
+joint jump.
 
 Near a wrist singularity, the wrist decomposition keeps an approximate
 candidate instead of dropping the pose outright; the pose-error score then
