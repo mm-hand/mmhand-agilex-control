@@ -1,9 +1,17 @@
 # third_party
 
-Place the vendor `pyAgxArm` SDK here:
+Vendor dependencies that should stay outside the main source tree live here.
+
+`pyAgxArm` is referenced as a git submodule:
 
 ```text
 third_party/pyAgxArm/
 ```
 
-`hardware.py` adds this directory to `sys.path` at runtime. The SDK contents are not vendored in this commit.
+After cloning this repository, initialize it with:
+
+```bash
+git submodule update --init --recursive
+```
+
+`hardware.py` adds `third_party/pyAgxArm` to `sys.path` at runtime.

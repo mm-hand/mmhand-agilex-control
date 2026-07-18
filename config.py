@@ -73,7 +73,7 @@ class SimConfig:
     joint_log_period_s: float = 1.0
 @dataclass(frozen=True)
 class RealArmConfig:
-    sdk_path: str = "/home/collin/github/nero-node/third_party/pyAgxArm"
+    sdk_path: str = "third_party/pyAgxArm"
     interface: str = "socketcan"
     channel: str = "can0"
     bitrate: int = 1_000_000

@@ -13,6 +13,12 @@ embedded `rclpy` node, following the lightweight pattern used by `read_pico`.
 
 ## Install dependencies
 
+Initialize the vendor SDK submodule after cloning:
+
+```bash
+git submodule update --init --recursive
+```
+
 Use a conda/RoboStack ROS environment with the same ROS distro and Python
 version as `read_pico`. The examples below name the environment `mmhand-ros`; use
 the same environment name when running both projects.
@@ -69,7 +75,7 @@ Important options:
 RuntimeConfig.mode             "dual_sim" | "left_real" | "right_real"
 PoseInputConfig.poses_topic    /read_pose/poses
 PoseInputConfig.tracked_topic  /read_pose/tracked
-RealArmConfig.sdk_path         pyAgxArm SDK path
+RealArmConfig.sdk_path         third_party/pyAgxArm
 RealArmConfig.channel          SocketCAN channel, usually can0
 StartupConfig.enable_real_move_j true by default
 ```
@@ -278,7 +284,7 @@ analytic_control/
 +- sim.py          # Swift backend
 +- hardware.py     # pyAgxArm real-arm backend
 +- nero_urdf/      # URDF and meshes
-+- third_party/    # optional vendor SDK location
++- third_party/    # vendor SDK submodules
 ```
 
 ## Debug
