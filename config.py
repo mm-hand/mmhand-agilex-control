@@ -2,7 +2,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 @dataclass(frozen=True)
 class RuntimeConfig:
-    mode: str = "left_real"  # dual_sim | left_real | right_real
+    # "dual_sim": simulate both arms; "left_real"/"right_real": teleoperate that real arm.
+    mode: str = "left_real"
 @dataclass(frozen=True)
 class PoseInputConfig:
     node_name: str = "analytic_control"
