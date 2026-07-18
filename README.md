@@ -5,13 +5,13 @@ run either dual-arm Swift simulation or teleoperate one real arm.
 
 ## System prerequisites
 
-The supported baseline is Ubuntu 24.04 x86_64. Use Miniforge (recommended),
-Mambaforge, or Miniconda with a working `conda` command. Install the required
+The supported baseline is Ubuntu 24.04 x86_64. Miniforge is the recommended
+Conda distribution; Mambaforge and Miniconda also work. Install the required
 Ubuntu tools:
 
 ```bash
 sudo apt update
-sudo apt install -y git adb build-essential
+sudo apt install -y git curl adb build-essential
 ```
 
 `build-essential` provides the C/C++ toolchain used to compile `ik_solver.pyx`.
@@ -22,6 +22,24 @@ simulation is viewed in a current desktop Chrome or Chromium browser.
 
 System ROS may remain installed, but do not source
 `/opt/ros/jazzy/setup.bash` in a terminal where `mmhand-ros` is active.
+
+## Install Conda
+
+Skip this section if `conda --version` already works. Otherwise install
+Miniforge in your user directory, initialize Bash, and verify it:
+
+```bash
+curl -L -O "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh"
+bash Miniforge3-$(uname)-$(uname -m).sh -b -p "$HOME/miniforge3"
+"$HOME/miniforge3/bin/conda" init bash
+source "$HOME/.bashrc"
+conda config --set auto_activate_base false
+conda --version
+```
+
+Expected result: `conda --version` prints a version number. New terminals can
+then use the `conda` command. The installer is provided by the
+[official Miniforge project](https://github.com/conda-forge/miniforge#unix-like-platforms-macos-linux--wsl).
 
 ## Clone the workspace
 
