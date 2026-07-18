@@ -13,19 +13,9 @@ embedded `rclpy` node, following the lightweight pattern used by `read_pico`.
 
 ## Install dependencies
 
-Use the same ROS-enabled Python environment as `read_pico`. If you use a local
-virtual environment, create it outside git-tracked files or use `.venv`, which is
-ignored by git.
-
-```bash
-cd analytic_control
-
-# First-time setup, or after dependency changes.
-.venv/bin/python -m pip install -r requirements.txt
-```
-
-If you use a RoboStack conda environment instead, keep it consistent with
-`read_pico`:
+Use a conda/RoboStack ROS environment with the same ROS distro and Python
+version as `read_pico`. The examples below name the environment `mmhand-ros`; use
+the same environment name when running both projects.
 
 ```bash
 conda create -y -n mmhand-ros --override-channels \
@@ -34,23 +24,37 @@ conda create -y -n mmhand-ros --override-channels \
   ros-jazzy-ros-base \
   ros-jazzy-geometry-msgs \
   ros-jazzy-std-msgs \
-  ros-jazzy-rmw-cyclonedds-cpp
+  ros-jazzy-rmw-cyclonedds-cpp \
+  numpy=1.26 \
+  scipy=1.13 \
+  cython \
+  setuptools \
+  wheel \
+  websockets=10.4 \
+  python-can \
+  pyusb \
+  roboticstoolbox-python=1.3.0 \
+  spatialmath-python=1.1.16 \
+  spatialgeometry=1.1.0 \
+  swift-sim=1.1.0
 
 conda activate mmhand-ros
 export PYTHONNOUSERSITE=1
-python -m pip install -r requirements.txt
 ```
 
-Do not source `/opt/ros/jazzy/setup.bash` while a RoboStack conda environment is
-active. Mixing system ROS Python packages with conda packages can break imports.
+Do not source `/opt/ros/jazzy/setup.bash` while this conda environment is active.
+Set `PYTHONNOUSERSITE=1` so both `read_pico` and `analytic_control` resolve the
+same conda/RoboStack ROS packages.
 
 ## Build IK
 
 `ik_solver.pyx` must be compiled before running:
 
 ```bash
+conda activate mmhand-ros
+export PYTHONNOUSERSITE=1
 cd analytic_control
-.venv/bin/python setup.py build_ext --inplace
+python setup.py build_ext --inplace
 ```
 
 Generated C and shared-object files are ignored by git.
@@ -99,9 +103,11 @@ cd read_pico
 Terminal 2, analytic control:
 
 ```bash
+conda activate mmhand-ros
+export PYTHONNOUSERSITE=1
 cd analytic_control
-.venv/bin/python setup.py build_ext --inplace
-.venv/bin/python run.py
+python setup.py build_ext --inplace
+python run.py
 ```
 
 In real-arm mode, the arm first moves to the startup pose with rate-limited
@@ -118,9 +124,11 @@ mode: str = "dual_sim"
 Then run:
 
 ```bash
+conda activate mmhand-ros
+export PYTHONNOUSERSITE=1
 cd analytic_control
-.venv/bin/python setup.py build_ext --inplace
-.venv/bin/python run.py
+python setup.py build_ext --inplace
+python run.py
 ```
 
 Swift usually opens at:
@@ -163,9 +171,11 @@ sudo ip link set can0 up
 Run analytic control:
 
 ```bash
+conda activate mmhand-ros
+export PYTHONNOUSERSITE=1
 cd analytic_control
-.venv/bin/python setup.py build_ext --inplace
-.venv/bin/python run.py
+python setup.py build_ext --inplace
+python run.py
 ```
 
 Real hardware first moves to the startup pose with rate-limited `move_js`, then waits for
@@ -291,8 +301,10 @@ ros2 topic echo /analytic_control/left/current_pose --once
 Check Python imports and Cython build:
 
 ```bash
-.venv/bin/python -m py_compile run.py control_loop.py pose_io.py ik.py hardware.py sim.py transforms.py
-.venv/bin/python setup.py build_ext --inplace
+conda activate mmhand-ros
+export PYTHONNOUSERSITE=1
+python -m py_compile run.py control_loop.py pose_io.py ik.py hardware.py sim.py transforms.py
+python setup.py build_ext --inplace
 ```
 
 If real-arm startup fails before connecting, check:
@@ -300,5 +312,7 @@ If real-arm startup fails before connecting, check:
 ```bash
 ls -la /sys/class/net/can0
 sed -n '1p' /sys/class/net/can0/flags
-.venv/bin/python -c "from config import ControlConfig; from hardware import _sdk; _sdk(ControlConfig().real); print('pyAgxArm ok')"
+conda activate mmhand-ros
+export PYTHONNOUSERSITE=1
+python -c "from config import ControlConfig; from hardware import _sdk; _sdk(ControlConfig().real); print('pyAgxArm ok')"
 ```
