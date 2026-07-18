@@ -1,324 +1,78 @@
 # analytic_control
 
-Minimal Nero analytic-control runtime for PICO pose teleoperation.
+Nero mechanical-arm analytic IK control for PICO pose teleoperation. It can
+run either dual-arm Swift simulation or teleoperate one real arm.
 
-The program subscribes to controller poses published by `read_pico`, maps them
-through the calibrated controller/arm frames, solves Nero analytic IK, applies
-OneEuro filtering and online joint-space motion limiting, then drives either
-Swift simulation or one real Nero arm. It also publishes eight lightweight ROS 2
-telemetry topics for current/target joints and current/target flange poses.
+## Before running
 
-This is not a full ROS package. It is a normal Python entry point with an
-embedded `rclpy` node, following the lightweight pattern used by `read_pico`.
+Prepare a Conda/RoboStack ROS environment compatible with `read_pico`. Environment
+creation and dependency installation are managed separately.
 
-## Install dependencies
-
-Initialize the vendor SDK submodule after cloning:
+Initialize the real-arm SDK after cloning:
 
 ```bash
+cd analytic_control
 git submodule update --init --recursive
 ```
 
-Use a conda/RoboStack ROS environment with the same ROS distro and Python
-version as `read_pico`. The examples below name the environment `mmhand-ros`; use
-the same environment name when running both projects.
+## Configure mode
 
-```bash
-conda create -y -n mmhand-ros --override-channels \
-  -c conda-forge -c robostack-jazzy \
-  python=3.12 \
-  ros-jazzy-ros-base \
-  ros-jazzy-geometry-msgs \
-  ros-jazzy-std-msgs \
-  ros-jazzy-rmw-cyclonedds-cpp \
-  numpy=1.26 \
-  scipy=1.13 \
-  cython \
-  setuptools \
-  wheel \
-  websockets=10.4 \
-  python-can \
-  pyusb \
-  roboticstoolbox-python=1.3.0 \
-  spatialmath-python=1.1.16 \
-  spatialgeometry=1.1.0 \
-  swift-sim=1.1.0
+Edit `RuntimeConfig.mode` in `config.py`:
 
-conda activate mmhand-ros
-export PYTHONNOUSERSITE=1
+```python
+mode: str = "dual_sim"    # Swift simulation for both arms
+mode: str = "left_real"   # left real-arm teleoperation (default)
+mode: str = "right_real"  # right real-arm teleoperation
 ```
 
-Do not source `/opt/ros/jazzy/setup.bash` while this conda environment is active.
-Set `PYTHONNOUSERSITE=1` so both `read_pico` and `analytic_control` resolve the
-same conda/RoboStack ROS packages.
+`RealArmConfig.sdk_path` defaults to `third_party/pyAgxArm`.
 
 ## Build IK
 
-`ik_solver.pyx` must be compiled before running:
+Run this before the first run and after changing `ik_solver.pyx`:
 
 ```bash
-conda activate mmhand-ros
-export PYTHONNOUSERSITE=1
 cd analytic_control
+conda activate <ros_conda_env>
+export PYTHONNOUSERSITE=1
 python setup.py build_ext --inplace
 ```
 
-Generated C and shared-object files are ignored by git.
+## Run simulation
 
-## Configure runtime
+Set `RuntimeConfig.mode` to `"dual_sim"`, then run:
 
-Runtime parameters live in `config.py`.
-
-Important options:
-
-```text
-RuntimeConfig.mode             "dual_sim" | "left_real" | "right_real"
-PoseInputConfig.poses_topic    /read_pose/poses
-PoseInputConfig.tracked_topic  /read_pose/tracked
-RealArmConfig.sdk_path         third_party/pyAgxArm
-RealArmConfig.channel          SocketCAN channel, usually can0
-StartupConfig.enable_real_move_j true by default
+```bash
+cd analytic_control
+conda activate <ros_conda_env>
+export PYTHONNOUSERSITE=1
+python run.py
 ```
 
-Current default mode is `left_real`, so `run.py` connects to the left real arm
-unless you change `RuntimeConfig.mode`.
+Open Swift at `http://localhost:52000`.
 
-Modes:
+## Run real-arm teleoperation
 
-```text
-dual_sim    Run left and right arms in Swift simulation.
-left_real   Subscribe to left PICO pose and send left-arm move_js commands.
-right_real  Subscribe to right PICO pose and send right-arm move_js commands.
-```
-
-Simulation and real-arm teleoperation are selected by this single config value.
-They are not run in parallel.
-
-## Quick start
-
-From the `mm-hand` workspace, run `read_pico` in one terminal and
-`analytic_control` in another.
-
-Terminal 1, PICO pose publisher:
+Start PICO pose publishing in one terminal:
 
 ```bash
 cd read_pico
 ./run_ubuntu_ros.sh --vr-port 9100
 ```
 
-Terminal 2, analytic control:
+Set `RuntimeConfig.mode` to `"left_real"` or `"right_real"`. In another
+terminal, configure CAN and start control:
 
 ```bash
-conda activate mmhand-ros
-export PYTHONNOUSERSITE=1
 cd analytic_control
-python setup.py build_ext --inplace
-python run.py
-```
-
-In real-arm mode, the arm first moves to the startup pose with rate-limited
-`move_js`. Press Enter in the analytic-control terminal to begin teleoperation.
-
-## Run simulation
-
-Set:
-
-```python
-mode: str = "dual_sim"
-```
-
-Then run:
-
-```bash
-conda activate mmhand-ros
+conda activate <ros_conda_env>
 export PYTHONNOUSERSITE=1
-cd analytic_control
-python setup.py build_ext --inplace
-python run.py
-```
-
-Swift usually opens at:
-
-```text
-http://localhost:52000
-```
-
-Simulation publishes the same ROS telemetry topics as real-arm mode.
-
-## Run real-arm teleoperation
-
-Start `read_pico` first so `/read_pose/*` is available:
-
-```bash
-cd ../read_pico
-./run_ubuntu_ros.sh --vr-port 9100
-```
-
-Set `RuntimeConfig.mode` in `config.py`:
-
-```python
-mode: str = "left_real"
-```
-
-or:
-
-```python
-mode: str = "right_real"
-```
-
-Bring up SocketCAN:
-
-```bash
 sudo ip link set can0 down
 sudo ip link set can0 type can bitrate 1000000
 sudo ip link set can0 up
-```
-
-Run analytic control:
-
-```bash
-conda activate mmhand-ros
-export PYTHONNOUSERSITE=1
-cd analytic_control
-python setup.py build_ext --inplace
 python run.py
 ```
 
-Real hardware first moves to the startup pose with rate-limited `move_js`, then waits for
-Enter before teleoperation starts. Teleoperation commands also use `move_js`.
-
-## ROS 2 topics
-
-Node: `analytic_control`
-
-Input topics, published by `read_pico`:
-
-```text
-/read_pose/poses      geometry_msgs/PoseArray
-/read_pose/tracked    std_msgs/UInt8MultiArray
-```
-
-Input conventions:
-
-```text
-poses.poses[0] = left controller grip pose
-poses.poses[1] = right controller grip pose
-poses.header.frame_id = "pose_input_horizon"
-tracked.data = [left_valid, right_valid]
-```
-
-Output telemetry topics:
-
-```text
-/analytic_control/left/current_joints    std_msgs/Float64MultiArray
-/analytic_control/left/target_joints     std_msgs/Float64MultiArray
-/analytic_control/left/current_pose      geometry_msgs/PoseStamped
-/analytic_control/left/target_pose       geometry_msgs/PoseStamped
-/analytic_control/right/current_joints   std_msgs/Float64MultiArray
-/analytic_control/right/target_joints    std_msgs/Float64MultiArray
-/analytic_control/right/current_pose     geometry_msgs/PoseStamped
-/analytic_control/right/target_pose      geometry_msgs/PoseStamped
-```
-
-Output conventions:
-
-```text
-current_joints.data = 7 joint angles in radians
-target_joints.data  = 7 target joint angles in radians after IK filtering and motion limiting
-current_pose        = FK flange pose from current joints
-target_pose         = FK flange pose from target joints
-pose.header.frame_id = "pose_input_horizon"
-```
-
-In `dual_sim`, both left and right telemetry are published. In `left_real` or
-`right_real`, only the active side publishes non-empty telemetry.
-
-## Coordinate conventions
-
-`read_pico` publishes controller grip poses in the horizon frame:
-
-```text
-+X = right, +Y = up, -Z = forward
-origin = head position
-orientation = gravity-aligned, head yaw only
-```
-
-`analytic_control` scales and maps those controller poses through:
-
-```text
-horizon -> shoulder -> arm_base -> flange
-```
-
-Telemetry pose topics publish flange poses back in `pose_input_horizon`.
-
-## Runtime pipeline
-
-```text
-ROS pose input
--> OneEuro pose filter
--> input speed/step limiter
--> calibrated frame transform
--> analytic IK
--> OneEuro joint-target filter
--> online joint motion limiter
--> Swift backend or pyAgxArm real-arm backend
--> ROS telemetry publishers
-```
-
-If pose input is stale or tracking is lost, the loop holds the internal motion
-planner and sends no new real-arm command.
-
-## File layout
-
-```text
-analytic_control/
-+- run.py          # entry point and stdout logger
-+- config.py       # runtime configuration
-+- control_loop.py # teleoperation loop
-+- pose_io.py      # ROS pose subscribers and telemetry publishers
-+- frames.py       # controller-to-arm frame transforms
-+- ik.py           # Nero IK/FK wrapper and URDF loader
-+- ik_solver.pyx   # Cython analytic IK solver
-+- motion.py       # online joint-space limiter
-+- filters.py      # OneEuro pose/joint filters and input limiter
-+- sim.py          # Swift backend
-+- hardware.py     # pyAgxArm real-arm backend
-+- nero_urdf/      # URDF and meshes
-+- third_party/    # vendor SDK submodules
-```
-
-## Debug
-
-Check ROS input from `read_pico`:
-
-```bash
-ros2 topic echo /read_pose/poses --once
-ros2 topic echo /read_pose/tracked --once
-```
-
-Check analytic-control telemetry:
-
-```bash
-ros2 topic list | grep /analytic_control
-ros2 topic echo /analytic_control/left/current_joints --once
-ros2 topic echo /analytic_control/left/current_pose --once
-```
-
-Check Python imports and Cython build:
-
-```bash
-conda activate mmhand-ros
-export PYTHONNOUSERSITE=1
-python -m py_compile run.py control_loop.py pose_io.py ik.py hardware.py sim.py transforms.py
-python setup.py build_ext --inplace
-```
-
-If real-arm startup fails before connecting, check:
-
-```bash
-ls -la /sys/class/net/can0
-sed -n '1p' /sys/class/net/can0/flags
-conda activate mmhand-ros
-export PYTHONNOUSERSITE=1
-python -c "from config import ControlConfig; from hardware import _sdk; _sdk(ControlConfig().real); print('pyAgxArm ok')"
-```
+The arm first moves to the configured startup pose with the normal joint speed
+limits. Press Enter in the analytic-control terminal only after that movement
+finishes to begin teleoperation.
