@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 from config import MotionConfig, RealArmConfig
 from frames import CoordinateFrames
-from motion import ArmMotionPlanner, angle_diff
+from motion import joint_trajectory
 def _sdk(config: RealArmConfig):
     sdk_path = Path(config.sdk_path)
     if not sdk_path.is_absolute():
@@ -80,8 +80,8 @@ class RealArmBackend:
         self.logger = logger
         self.robot = self._connect_robot()
         self.q_feedback = read_current_joint_angles(self.robot, real_config.startup_timeout_s)
-        self._set_servo_mode()
         self.last_sent_q = self.q_feedback.copy()
+        self.js_active = False
     def _connect_robot(self):
         ensure_socketcan_ready(self.config)
         robot = create_robot(self.config)
@@ -104,20 +104,21 @@ class RealArmBackend:
             self.robot.set_auto_set_motion_mode_enabled(False)
     def move_j_startup(self, q: np.ndarray) -> None:
         target = validate_joint_command(q)
-        self._set_servo_mode()
-        planner = ArmMotionPlanner(self.motion_config, self.q_feedback.copy())
+        if hasattr(self.robot, "set_auto_set_motion_mode_enabled"):
+            self.robot.set_auto_set_motion_mode_enabled(False)
+        if hasattr(self.robot, "set_motion_mode"):
+            self.robot.set_motion_mode("j")
         dt = 1.0 / self.motion_config.command_hz
-        while np.max(np.abs(angle_diff(target, planner.q))) > 0.01:
-            q_cmd = planner.step(target, time.monotonic())
-            self.robot.move_js([float(v) for v in q_cmd])
+        for q_cmd in joint_trajectory(self.motion_config, self.q_feedback, target):
+            self.robot.move_j([float(v) for v in q_cmd])
             self.last_sent_q = q_cmd.copy()
             time.sleep(dt)
-            self.refresh_feedback()
-        self.robot.move_js([float(v) for v in target])
-        self.last_sent_q = target.copy()
-        time.sleep(dt)
-        feedback = read_joint_angles_optional(self.robot)
-        self.q_feedback = np.asarray(feedback, dtype=float).reshape(7) if feedback is not None else target.copy()
+    def current_joints(self, side: str, wait: bool = False) -> np.ndarray:
+        if side != self.side:
+            raise ValueError(f"{side} arm is not connected")
+        if wait:
+            self.q_feedback = read_current_joint_angles(self.robot, self.config.startup_timeout_s)
+        return self.q_feedback.copy()
     def refresh_feedback(self) -> None:
         feedback = read_joint_angles_optional(self.robot)
         if feedback is not None:
@@ -126,9 +127,14 @@ class RealArmBackend:
         self.refresh_feedback()
         q = left_q if self.side == "left" else right_q
         if q is None:
-            return
+            if not self.js_active:
+                return
+            q = self.last_sent_q
         q = validate_joint_command(q)
+        if not self.js_active:
+            self._set_servo_mode()
         self.robot.move_js([float(v) for v in q])
+        self.js_active = True
         self.last_sent_q = q.copy()
     def close(self) -> None:
         try:

@@ -55,3 +55,18 @@ class ArmMotionPlanner:
         self.q = clip_to_joint_limits(self.q + step, self.config)
         self.qd = qd_next.copy()
         return self.q.copy()
+
+
+def joint_trajectory(config: MotionConfig, q_start: np.ndarray, q_target: np.ndarray) -> list[np.ndarray]:
+    planner = ArmMotionPlanner(config, q_start)
+    target = clip_to_joint_limits(near_target(np.asarray(q_target, dtype=float).reshape(7), planner.q), config)
+    vmax = _as_limit(config.max_velocity_rad_s, "max_velocity_rad_s")
+    amax = _as_limit(config.max_acceleration_rad_s2, "max_acceleration_rad_s2")
+    duration = np.max(np.abs(angle_diff(target, planner.q)) / vmax + 2.0 * vmax / amax) + 1.0
+    dt = 1.0 / config.command_hz
+    points: list[np.ndarray] = []
+    for step in range(int(np.ceil(duration / dt))):
+        points.append(planner.step(target, (step + 1) * dt))
+        if np.max(np.abs(angle_diff(target, planner.q))) < 1e-6:
+            return points
+    raise RuntimeError("startup trajectory did not reach its target")

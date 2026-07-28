@@ -59,8 +59,7 @@ class FilterConfig:
 @dataclass(frozen=True)
 class StartupConfig:
     left_pose_rad: tuple[float, ...] = (1.328929, 1.421239, -0.917729, 1.662461, -0.391128, 0.455112, -0.159994)
-    enable_sim_pose: bool = True
-    enable_real_move_j: bool = True
+    enable_startup_pose: bool = True
 @dataclass(frozen=True)
 class MotionConfig:
     command_hz: float = 50.0

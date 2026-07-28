@@ -36,28 +36,22 @@ def run_control(config: ControlConfig, logger: logging.Logger) -> int:
         right_ik = NeroIK(config.ik)
         real_side = _real_side(config.runtime.mode)
         bases = arm_base_in_horizon(config.frames)
+        use_left = real_side is None or real_side == "left"
+        use_right = real_side is None or real_side == "right"
         if real_side is None:
-            if config.startup.enable_sim_pose:
-                left_ik.reset_state(_startup_pose(config))
-            backend = SwiftSimBackend(left_ik.robot, right_ik.robot, bases, config.sim, logger)
-            left_start = left_ik.robot.q.copy()
-            right_start = right_ik.robot.q.copy()
+            backend = SwiftSimBackend(left_ik.robot, right_ik.robot, bases, config.sim, config.motion, logger)
         else:
             from hardware import RealArmBackend
             backend = RealArmBackend(real_side, config.real, config.motion, logger)
-            left_start = left_ik.robot.q.copy()
-            right_start = right_ik.robot.q.copy()
-            if real_side == "left":
-                if config.startup.enable_real_move_j:
-                    backend.move_j_startup(_startup_pose(config))
-                    input("startup pose reached; press Enter to start teleop...")
-                left_start = backend.q_feedback.copy()
-                left_ik.reset_state(left_start)
-            else:
-                right_start = backend.q_feedback.copy()
-                right_ik.reset_state(right_start)
-        use_left = real_side is None or real_side == "left"
-        use_right = real_side is None or real_side == "right"
+        if config.startup.enable_startup_pose and use_left:
+            backend.move_j_startup(_startup_pose(config))
+            input("wait for startup pose, then press Enter to start teleop...")
+        left_start = backend.current_joints("left", wait=True) if use_left else left_ik.robot.q.copy()
+        right_start = backend.current_joints("right", wait=True) if use_right else right_ik.robot.q.copy()
+        if use_left:
+            left_ik.reset_state(left_start)
+        if use_right:
+            right_ik.reset_state(right_start)
         left_pose_filter = PoseFilter(config.filters.pose)
         right_pose_filter = PoseFilter(config.filters.pose)
         left_limiter = PoseInputLimiter(config.input_limit)
@@ -92,12 +86,8 @@ def run_control(config: ControlConfig, logger: logging.Logger) -> int:
                 logger.info(status)
                 last_status = status
             backend.update(left_q, right_q, frames, status, dt)
-            if real_side is None:
-                left_current_q = left_ik.robot.q.copy() if use_left else None
-                right_current_q = right_ik.robot.q.copy() if use_right else None
-            else:
-                left_current_q = backend.q_feedback.copy() if real_side == "left" else None
-                right_current_q = backend.q_feedback.copy() if real_side == "right" else None
+            left_current_q = backend.current_joints("left") if use_left else None
+            right_current_q = backend.current_joints("right") if use_right else None
             pose_input.publish_telemetry(
                 left_current_q,
                 left_q if use_left else None,
