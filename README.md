@@ -141,7 +141,10 @@ mode: str = "left_real"   # left real-arm teleoperation (default)
 mode: str = "right_real"  # right real-arm teleoperation
 ```
 
-`RealArmConfig.sdk_path` defaults to `third_party/pyAgxArm`.
+`RealArmConfig.sdk_path` defaults to `third_party/pyAgxArm`. Its `firmware`
+setting defaults to `"auto"`; valid manual overrides are `"default"`,
+`"v111"`, `"v112"`, and `"v120"`. Use an override only when automatic
+detection cannot obtain the firmware version.
 
 ## Run simulation
 
@@ -178,8 +181,13 @@ conda activate mmhand-ros
 sudo ip link set can0 down
 sudo ip link set can0 type can bitrate 1000000
 sudo ip link set can0 up
+python read_joints.py
 python run.py
 ```
+
+`read_joints.py` uses the same firmware detection and CAN connection path as
+real-arm teleoperation. It must print seven live joint angles before running
+`run.py`.
 
 The arm first moves to the configured startup pose with the normal joint speed
 limits. Press Enter in the analytic-control terminal only after that movement

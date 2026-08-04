@@ -77,9 +77,13 @@ class RealArmConfig:
     interface: str = "socketcan"
     channel: str = "can0"
     bitrate: int = 1_000_000
+    # "auto", "default" (<=1.10), "v111", "v112", or "v120" (>=1.20).
+    firmware: str = "auto"
     speed_percent: int = 20
     startup_timeout_s: float = 3.0
     enable_timeout_s: float = 5.0
+    can_send_timeout_s: float = 0.05
+    can_frame_interval_s: float = 0.005
     sdk_joint_limits_enabled: bool = False
 @dataclass(frozen=True)
 class ControlConfig:
