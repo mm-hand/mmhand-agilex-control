@@ -59,6 +59,7 @@ class FilterConfig:
 @dataclass(frozen=True)
 class StartupConfig:
     left_pose_rad: tuple[float, ...] = (1.328929, 1.421239, -0.917729, 1.662461, -0.391128, 0.455112, -0.159994)
+    right_pose_rad: tuple[float, ...] = (1.328929, 1.421239, 2.223864, 1.662461, -0.391128, 0.455112, -0.159994)
     enable_startup_pose: bool = True
 @dataclass(frozen=True)
 class MotionConfig:
@@ -84,6 +85,7 @@ class RealArmConfig:
     enable_timeout_s: float = 5.0
     can_send_timeout_s: float = 0.05
     can_frame_interval_s: float = 0.005
+    servo_handoff_s: float = 0.2
     sdk_joint_limits_enabled: bool = False
 @dataclass(frozen=True)
 class ControlConfig:

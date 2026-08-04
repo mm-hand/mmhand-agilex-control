@@ -17,8 +17,8 @@ def _real_side(mode: str) -> str | None:
     if mode == "dual_sim":
         return None
     raise ValueError(f"unknown runtime mode: {mode}")
-def _startup_pose(config: ControlConfig) -> np.ndarray:
-    return np.asarray(config.startup.left_pose_rad, dtype=float).reshape(7)
+def _startup_pose(config: ControlConfig, side: str) -> np.ndarray:
+    return np.asarray(getattr(config.startup, f"{side}_pose_rad"), dtype=float).reshape(7)
 def _motion_step(planner: ArmMotionPlanner, target: np.ndarray | None, now: float) -> np.ndarray | None:
     if target is None:
         planner.step(None, now)
@@ -43,11 +43,14 @@ def run_control(config: ControlConfig, logger: logging.Logger) -> int:
         else:
             from hardware import RealArmBackend
             backend = RealArmBackend(real_side, config.real, config.motion, logger)
-        if config.startup.enable_startup_pose and use_left:
-            backend.move_j_startup(_startup_pose(config))
-            input("wait for startup pose, then press Enter to start teleop...")
-        left_start = backend.current_joints("left", wait=True) if use_left else left_ik.robot.q.copy()
-        right_start = backend.current_joints("right", wait=True) if use_right else right_ik.robot.q.copy()
+        if config.startup.enable_startup_pose:
+            if use_left:
+                backend.move_j_startup("left", _startup_pose(config, "left"))
+            if use_right:
+                backend.move_j_startup("right", _startup_pose(config, "right"))
+            input("startup pose reached; press Enter to start teleop...")
+        left_start = backend.prepare_teleop("left") if use_left else left_ik.robot.q.copy()
+        right_start = backend.prepare_teleop("right") if use_right else right_ik.robot.q.copy()
         if use_left:
             left_ik.reset_state(left_start)
         if use_right:

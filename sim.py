@@ -50,13 +50,17 @@ class SwiftSimBackend:
         for item in self.items:
             self.env.add(item)
         self.logger.info("swift ready")
-    def move_j_startup(self, q: np.ndarray) -> None:
+    def move_j_startup(self, side: str, q: np.ndarray) -> None:
         dt = 1.0 / self.motion_config.command_hz
         empty_frames = CoordinateFrames(None, None)
-        for q_cmd in joint_trajectory(self.motion_config, self.left_robot.q, q):
-            self.update(q_cmd, None, empty_frames, "moving left arm to startup pose", dt)
+        start = self.current_joints(side)
+        for q_cmd in joint_trajectory(self.motion_config, start, q):
+            left_q, right_q = (q_cmd, None) if side == "left" else (None, q_cmd)
+            self.update(left_q, right_q, empty_frames, f"moving {side} arm to startup pose", dt)
             time.sleep(dt)
         self.status_label.desc = "startup pose reached; waiting for Enter"
+    def prepare_teleop(self, side: str) -> np.ndarray:
+        return self.current_joints(side)
     def current_joints(self, side: str, wait: bool = False) -> np.ndarray:
         robot = self.left_robot if side == "left" else self.right_robot if side == "right" else None
         if robot is None:

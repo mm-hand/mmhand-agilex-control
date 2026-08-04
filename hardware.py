@@ -4,6 +4,7 @@ import sys
 import time
 from pathlib import Path
 from types import MethodType
+from typing import Callable
 import numpy as np
 from config import MotionConfig, RealArmConfig
 from frames import CoordinateFrames
@@ -126,20 +127,30 @@ def install_can_frame_interval(robot, interval_s: float) -> None:
                 time.sleep(interval_s)
     robot._send_msgs = MethodType(delayed_send_msgs, robot)
 
-def read_joint_angles_optional(robot) -> list[float] | None:
+def read_joint_feedback_optional(robot) -> tuple[np.ndarray, float] | None:
     msg = robot.get_joint_angles()
     if msg is None or msg.msg is None:
         return None
-    return list(msg.msg)
+    q = np.asarray(msg.msg, dtype=float).reshape(7)
+    if not np.all(np.isfinite(q)):
+        return None
+    return q, float(getattr(msg, "timestamp", 0.0))
 
-def read_current_joint_angles(robot, timeout_s: float) -> np.ndarray:
+def read_joint_angles_optional(robot) -> list[float] | None:
+    feedback = read_joint_feedback_optional(robot)
+    return None if feedback is None else feedback[0].tolist()
+
+def read_joint_feedback(robot, timeout_s: float, newer_than: float | None = None) -> tuple[np.ndarray, float]:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        values = read_joint_angles_optional(robot)
-        if values is not None:
-            return np.asarray(values, dtype=float).reshape(7)
+        feedback = read_joint_feedback_optional(robot)
+        if feedback is not None and (newer_than is None or feedback[1] > newer_than):
+            return feedback
         time.sleep(0.02)
     raise RuntimeError("timed out waiting for live joint feedback")
+
+def read_current_joint_angles(robot, timeout_s: float) -> np.ndarray:
+    return read_joint_feedback(robot, timeout_s)[0]
 
 def wait_for_feedback(robot, timeout_s: float) -> bool:
     deadline = time.monotonic() + timeout_s
@@ -196,16 +207,23 @@ def validate_joint_command(q: np.ndarray) -> np.ndarray:
     return q
 
 class RealArmBackend:
-    def __init__(self, side: str, real_config: RealArmConfig, motion_config: MotionConfig, logger: logging.Logger) -> None:
+    def __init__(
+        self,
+        side: str,
+        real_config: RealArmConfig,
+        motion_config: MotionConfig,
+        logger: logging.Logger,
+        robot_factory: Callable[[RealArmConfig, logging.Logger], tuple[object, str]] | None = None,
+    ) -> None:
         if side not in {"left", "right"}:
             raise ValueError(f"unsupported real arm side: {side}")
         self.side = side
         self.config = real_config
         self.motion_config = motion_config
         self.logger = logger
-        self.robot, self.firmware = self._connect_robot()
+        self.robot, self.firmware = robot_factory(real_config, logger) if robot_factory else self._connect_robot()
         try:
-            self.q_feedback = read_current_joint_angles(self.robot, real_config.startup_timeout_s)
+            self.q_feedback, self.feedback_at = read_joint_feedback(self.robot, real_config.startup_timeout_s)
         except Exception:
             self.robot.disconnect()
             raise
@@ -223,7 +241,9 @@ class RealArmBackend:
             self.robot.set_motion_mode("js")
         if hasattr(self.robot, "set_auto_set_motion_mode_enabled"):
             self.robot.set_auto_set_motion_mode_enabled(False)
-    def move_j_startup(self, q: np.ndarray) -> None:
+    def move_j_startup(self, side: str, q: np.ndarray) -> None:
+        if side != self.side:
+            raise ValueError(f"{side} arm is not connected")
         target = validate_joint_command(q)
         if hasattr(self.robot, "set_auto_set_motion_mode_enabled"):
             self.robot.set_auto_set_motion_mode_enabled(False)
@@ -234,16 +254,45 @@ class RealArmBackend:
             self.robot.move_j([float(v) for v in q_cmd])
             self.last_sent_q = q_cmd.copy()
             time.sleep(dt)
+        feedback = read_joint_feedback_optional(self.robot)
+        after = self.feedback_at if feedback is None else feedback[1]
+        self.q_feedback, self.feedback_at = read_joint_feedback(
+            self.robot, self.config.startup_timeout_s, newer_than=after
+        )
+    def prepare_teleop(self, side: str) -> np.ndarray:
+        if side != self.side:
+            raise ValueError(f"{side} arm is not connected")
+        feedback = read_joint_feedback_optional(self.robot)
+        after = self.feedback_at if feedback is None else feedback[1]
+        hold_q, self.feedback_at = read_joint_feedback(
+            self.robot, self.config.startup_timeout_s, newer_than=after
+        )
+        self.q_feedback = hold_q.copy()
+        self._set_servo_mode()
+        dt = 1.0 / self.motion_config.command_hz
+        cycles = max(1, int(np.ceil(self.config.servo_handoff_s / dt)))
+        for _ in range(cycles):
+            self.robot.move_js([float(v) for v in hold_q])
+            self.last_sent_q = hold_q.copy()
+            time.sleep(dt)
+            self.refresh_feedback()
+        self.js_active = True
+        self.logger.info(
+            "servo handoff complete side=%s hold_q=%s",
+            self.side,
+            np.array2string(hold_q, precision=6),
+        )
+        return hold_q
     def current_joints(self, side: str, wait: bool = False) -> np.ndarray:
         if side != self.side:
             raise ValueError(f"{side} arm is not connected")
         if wait:
-            self.q_feedback = read_current_joint_angles(self.robot, self.config.startup_timeout_s)
+            self.q_feedback, self.feedback_at = read_joint_feedback(self.robot, self.config.startup_timeout_s)
         return self.q_feedback.copy()
     def refresh_feedback(self) -> None:
-        feedback = read_joint_angles_optional(self.robot)
+        feedback = read_joint_feedback_optional(self.robot)
         if feedback is not None:
-            self.q_feedback = np.asarray(feedback, dtype=float).reshape(7)
+            self.q_feedback, self.feedback_at = feedback
     def update(self, left_q: np.ndarray | None, right_q: np.ndarray | None, frames: CoordinateFrames, status: str, dt: float) -> None:
         self.refresh_feedback()
         q = left_q if self.side == "left" else right_q
