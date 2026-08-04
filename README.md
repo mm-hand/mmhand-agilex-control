@@ -111,6 +111,21 @@ python -c "import ik_solver; print(ik_solver.__file__)"
 Expected result: all three commands exit successfully. The second prints
 `1.3.0`; the third prints a compiled `ik_solver` shared-library path.
 
+Run the offline control regressions before connecting a real arm:
+
+```bash
+python test_ik.py
+python test_motion.py
+python test_hardware.py
+python test_logging.py
+```
+
+Expected result: every command ends with `All ... tests passed.`. The hardware
+test uses a fake SDK object; it does not open CAN or move an arm. These checks
+cover IK round trips and continuity, first-command acceleration/velocity/step
+limits, startup-to-servo holding, active-side routing, diagnostic rate limiting,
+and telemetry serialization.
+
 For real-arm work, verify the SocketCAN interface after configuring it:
 
 ```bash
@@ -189,9 +204,13 @@ python run.py
 real-arm teleoperation. It must print seven live joint angles before running
 `run.py`.
 
-The arm first moves to the configured startup pose with the normal joint speed
-limits. Press Enter in the analytic-control terminal only after that movement
-finishes to begin teleoperation.
+The arm first moves to the configured startup pose through the joint motion
+limits. Press Enter only after that movement finishes. The backend then switches
+to joint-servo mode while repeatedly commanding the latest measured joint
+position for `servo_handoff_s`. IK continuity and the online motion planner are
+reset from that same feedback. The first PICO target therefore enters through
+the configured acceleration, velocity, and per-tick step limits. Missing or
+stale pose input holds the last joint command.
 
 After the control loop starts, verify telemetry:
 
@@ -202,6 +221,35 @@ ros2 topic echo /analytic_control/left/current_joints --once
 
 In `dual_sim`, both sides publish telemetry. In real-arm mode, the active arm
 publishes non-empty current and target data.
+
+## Run logs
+
+File logging is enabled by `LogConfig.enabled`. Each invocation creates one
+directory under `logs/`:
+
+```text
+logs/<timestamp>_<mode>/
+|- control.log
+`- telemetry.csv
+```
+
+`control.log` contains connection, input-state, handoff, warning, and final
+summary messages. `telemetry.csv` records startup and teleoperation phases for
+each active arm, including:
+
+- raw and filtered PICO pose;
+- calibrated target flange pose;
+- raw IK, filtered IK, actual, and commanded seven-joint vectors;
+- actual, IK, and commanded flange poses;
+- real-arm current, torque, voltage, temperature, enable/error state, and arm
+  status diagnostics.
+
+Control values are sampled in the control loop. The heavier SDK diagnostics are
+rate-limited by `RealArmConfig.diagnostics_hz`, which defaults to 5 Hz. CSV
+data is flushed according to `LogConfig.flush_period_s`; the text log uses the
+configured rotation size and backup count. Ctrl-C closes both files and prints
+the final actual/commanded joints, PICO pose, and actual/IK flange poses. The
+generated `logs/` directory is ignored by Git.
 
 ## IK overview
 
