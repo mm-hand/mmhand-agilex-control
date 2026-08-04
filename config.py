@@ -91,7 +91,15 @@ class RealArmConfig:
     can_send_timeout_s: float = 0.05
     can_frame_interval_s: float = 0.005
     servo_handoff_s: float = 0.2
+    diagnostics_hz: float = 5.0
     sdk_joint_limits_enabled: bool = False
+@dataclass(frozen=True)
+class LogConfig:
+    enabled: bool = True
+    directory: str = "logs"
+    flush_period_s: float = 1.0
+    max_bytes: int = 2_000_000
+    backup_count: int = 3
 @dataclass(frozen=True)
 class ControlConfig:
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
@@ -104,3 +112,4 @@ class ControlConfig:
     motion: MotionConfig = field(default_factory=MotionConfig)
     sim: SimConfig = field(default_factory=SimConfig)
     real: RealArmConfig = field(default_factory=RealArmConfig)
+    log: LogConfig = field(default_factory=LogConfig)

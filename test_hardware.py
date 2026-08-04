@@ -19,10 +19,31 @@ class FakeRobot:
         self.normal_count = 0
         self.q = np.zeros(7)
         self.timestamp = 0.0
+        self.diagnostic_reads = 0
 
     def get_joint_angles(self):
         self.timestamp += 1.0
         return SimpleNamespace(msg=self.q.copy(), timestamp=self.timestamp)
+    def get_motor_states(self, joint):
+        self.diagnostic_reads += 1
+        return SimpleNamespace(msg=SimpleNamespace(
+            position=0.1 * joint, velocity=0.0, current=float(joint), torque=0.0
+        ))
+
+    def get_driver_states(self, joint):
+        self.diagnostic_reads += 1
+        return SimpleNamespace(msg=SimpleNamespace(
+            vol=48.0, foc_temp=30.0, motor_temp=31.0, bus_current=0.2,
+            foc_status=SimpleNamespace(driver_enable_status=True),
+        ))
+
+    def get_arm_status(self):
+        self.diagnostic_reads += 1
+        return SimpleNamespace(msg=SimpleNamespace(
+            ctrl_mode=1, arm_status=0, mode_feedback=6, motion_status=0,
+            err_status=SimpleNamespace(),
+        ))
+
 
     def set_motion_mode(self, mode):
         self.motion_modes.append(mode)
@@ -103,10 +124,20 @@ def test_real_backend_right_side():
     backend.close()
 
 
+def test_diagnostics_are_rate_limited():
+    backend, robot = _backend("left")
+    diagnostics = backend.diagnostics()
+    assert diagnostics["motors"][0]["current"] == 1.0
+    assert robot.diagnostic_reads == 15
+    assert backend.diagnostics() is None
+    assert robot.diagnostic_reads == 15
+
+
 if __name__ == "__main__":
     test_validate_joint_command_rejects_nan()
     test_real_backend_sends_only_active_side()
     test_servo_handoff_holds_fresh_feedback()
     test_startup_move_refreshes_feedback()
     test_real_backend_right_side()
+    test_diagnostics_are_rate_limited()
     print("All hardware tests passed.")

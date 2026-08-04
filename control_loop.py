@@ -8,6 +8,7 @@ from frames import arm_base_in_horizon, build_coordinate_frames
 from ik import NeroIK
 from motion import ArmMotionPlanner
 from pose_io import PoseInputSubscriber
+from run_log import SessionLogger
 from sim import SwiftSimBackend
 def _real_side(mode: str) -> str | None:
     if mode == "left_real":
@@ -28,7 +29,32 @@ def _flange_in_horizon(ik: NeroIK, horizon_to_arm_base: np.ndarray, q: np.ndarra
     if q is None:
         return None
     return horizon_to_arm_base @ ik.fk_flange(q)
-def run_control(config: ControlConfig, logger: logging.Logger) -> int:
+def _record_side(
+    session: SessionLogger,
+    side: str,
+    connected: bool,
+    tracked: bool,
+    raw_pose,
+    filtered_pose,
+    frame,
+    current_q,
+    ik_q,
+    filtered_q,
+    command_q,
+    current_flange,
+    ik_flange,
+    command_flange,
+    diagnostics,
+) -> None:
+    session.record(
+        "teleop", side, connected=connected, tracked=tracked,
+        pico_raw=raw_pose, pico_filtered=filtered_pose,
+        target_flange=None if frame is None else frame.transform_horizon_to_flange,
+        current_q=current_q, ik_q=ik_q, filtered_q=filtered_q, command_q=command_q,
+        current_flange=current_flange, ik_flange=ik_flange, command_flange=command_flange,
+        diagnostics=diagnostics,
+    )
+def run_control(config: ControlConfig, logger: logging.Logger, session: SessionLogger) -> int:
     pose_input = PoseInputSubscriber(config.pose_input)
     backend = None
     try:
@@ -45,12 +71,22 @@ def run_control(config: ControlConfig, logger: logging.Logger) -> int:
             backend = RealArmBackend(real_side, config.real, config.motion, logger)
         if config.startup.enable_startup_pose:
             if use_left:
-                backend.move_j_startup("left", _startup_pose(config, "left"))
+                startup = _startup_pose(config, "left")
+                session.event("startup_move", "left", command_q=startup)
+                backend.move_j_startup("left", startup)
+                session.event("startup_reached", "left", current_q=backend.current_joints("left"))
             if use_right:
-                backend.move_j_startup("right", _startup_pose(config, "right"))
+                startup = _startup_pose(config, "right")
+                session.event("startup_move", "right", command_q=startup)
+                backend.move_j_startup("right", startup)
+                session.event("startup_reached", "right", current_q=backend.current_joints("right"))
             input("startup pose reached; press Enter to start teleop...")
         left_start = backend.prepare_teleop("left") if use_left else left_ik.robot.q.copy()
         right_start = backend.prepare_teleop("right") if use_right else right_ik.robot.q.copy()
+        if use_left:
+            session.event("servo_hold", "left", current_q=left_start, command_q=left_start)
+        if use_right:
+            session.event("servo_hold", "right", current_q=right_start, command_q=right_start)
         if use_left:
             left_ik.reset_state(left_start)
         if use_right:
@@ -69,8 +105,10 @@ def run_control(config: ControlConfig, logger: logging.Logger) -> int:
             tick_start = time.monotonic()
             pose_input.spin()
             now = time.monotonic()
-            left_pose = left_limiter.apply(left_pose_filter.apply(pose_input.get_left(), now), now) if use_left else None
-            right_pose = right_limiter.apply(right_pose_filter.apply(pose_input.get_right(), now), now) if use_right else None
+            left_raw = pose_input.get_left() if use_left else None
+            right_raw = pose_input.get_right() if use_right else None
+            left_pose = left_limiter.apply(left_pose_filter.apply(left_raw, now), now) if use_left else None
+            right_pose = right_limiter.apply(right_pose_filter.apply(right_raw, now), now) if use_right else None
             frames = build_coordinate_frames(left_pose, right_pose, config.frames)
             left_target_raw = left_ik.solve(frames.left.transform_arm_base_to_flange) if use_left and frames.left else None
             right_target_raw = right_ik.solve(frames.right.transform_arm_base_to_flange) if use_right and frames.right else None
@@ -91,16 +129,29 @@ def run_control(config: ControlConfig, logger: logging.Logger) -> int:
             backend.update(left_q, right_q, frames, status, dt)
             left_current_q = backend.current_joints("left") if use_left else None
             right_current_q = backend.current_joints("right") if use_right else None
+            left_current_flange = _flange_in_horizon(left_ik, bases.left, left_current_q)
+            left_command_flange = _flange_in_horizon(left_ik, bases.left, left_q)
+            right_current_flange = _flange_in_horizon(right_ik, bases.right, right_current_q)
+            right_command_flange = _flange_in_horizon(right_ik, bases.right, right_q)
             pose_input.publish_telemetry(
-                left_current_q,
-                left_q if use_left else None,
-                _flange_in_horizon(left_ik, bases.left, left_current_q),
-                _flange_in_horizon(left_ik, bases.left, left_q if use_left else None),
-                right_current_q,
-                right_q if use_right else None,
-                _flange_in_horizon(right_ik, bases.right, right_current_q),
-                _flange_in_horizon(right_ik, bases.right, right_q if use_right else None),
+                left_current_q, left_q, left_current_flange, left_command_flange,
+                right_current_q, right_q, right_current_flange, right_command_flange,
             )
+            diagnostics = backend.diagnostics()
+            if use_left:
+                _record_side(
+                    session, "left", connected, pose_input.tracked[0] == 1,
+                    left_raw, left_pose, frames.left, left_current_q, left_target_raw, left_target, left_q,
+                    left_current_flange, _flange_in_horizon(left_ik, bases.left, left_target_raw),
+                    left_command_flange, diagnostics if real_side == "left" else None,
+                )
+            if use_right:
+                _record_side(
+                    session, "right", connected, pose_input.tracked[1] == 1,
+                    right_raw, right_pose, frames.right, right_current_q, right_target_raw, right_target, right_q,
+                    right_current_flange, _flange_in_horizon(right_ik, bases.right, right_target_raw),
+                    right_command_flange, diagnostics if real_side == "right" else None,
+                )
             elapsed = time.monotonic() - tick_start
             time.sleep(max(0.0, dt - elapsed))
     except KeyboardInterrupt:

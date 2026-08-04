@@ -3,6 +3,7 @@ __pycache__/
 build/
 install/
 log/
+logs/
 .venv*/
 *.so
 *.c

@@ -229,6 +229,8 @@ class RealArmBackend:
             raise
         self.last_sent_q = self.q_feedback.copy()
         self.js_active = False
+        self.next_diagnostics_at = 0.0
+        self.diagnostic_warnings: set[str] = set()
     def _connect_robot(self):
         robot, firmware = connect_robot(self.config, self.logger)
         self.logger.info(
@@ -306,6 +308,36 @@ class RealArmBackend:
         self.robot.move_js([float(v) for v in q])
         self.js_active = True
         self.last_sent_q = q.copy()
+    def _diagnostic_message(self, source: str, index: int | None, fields: tuple[str, ...]):
+        try:
+            getter = getattr(self.robot, source)
+            packet = getter() if index is None else getter(index)
+            if packet is None or packet.msg is None:
+                return None
+            return {field: getattr(packet.msg, field, None) for field in fields}
+        except Exception as exc:
+            key = f"{source}:{index}"
+            if key not in self.diagnostic_warnings:
+                self.logger.warning("diagnostic feedback unavailable source=%s joint=%s error=%s", source, index, exc)
+                self.diagnostic_warnings.add(key)
+            return None
+    def diagnostics(self) -> dict[str, object] | None:
+        now = time.monotonic()
+        if self.config.diagnostics_hz <= 0.0 or now < self.next_diagnostics_at:
+            return None
+        self.next_diagnostics_at = now + 1.0 / self.config.diagnostics_hz
+        motors = [
+            self._diagnostic_message("get_motor_states", joint, ("position", "velocity", "current", "torque"))
+            for joint in range(1, 8)
+        ]
+        drivers = [
+            self._diagnostic_message("get_driver_states", joint, ("vol", "foc_temp", "motor_temp", "bus_current", "foc_status"))
+            for joint in range(1, 8)
+        ]
+        arm = self._diagnostic_message(
+            "get_arm_status", None, ("ctrl_mode", "arm_status", "mode_feedback", "motion_status", "err_status")
+        )
+        return {"arm": arm, "motors": motors, "drivers": drivers}
     def close(self) -> None:
         try:
             try:

@@ -94,6 +94,8 @@ class SwiftSimBackend:
         left = np.array2string(np.asarray(self.left_robot.q, dtype=float), precision=4, suppress_small=True)
         right = np.array2string(np.asarray(self.right_robot.q, dtype=float), precision=4, suppress_small=True)
         self.logger.info("sim joints left=%s right=%s", left, right)
+    def diagnostics(self) -> None:
+        return None
     def close(self) -> None:
         try:
             self.env.close()
