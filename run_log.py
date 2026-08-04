@@ -43,7 +43,10 @@ def _value(value: Any) -> Any:
     attributes = getattr(value, "__dict__", None)
     if attributes is not None:
         return {key: _value(item) for key, item in attributes.items() if not key.startswith("_")}
-    array = np.asarray(value, dtype=float)
+    try:
+        array = np.asarray(value, dtype=float)
+    except (TypeError, ValueError):
+        return str(value)
     if array.shape == (4, 4):
         quat = quat_xyzw_from_rotation_matrix(array[:3, :3])
         return [*map(float, array[:3, 3]), *map(float, quat)]
@@ -61,6 +64,7 @@ class SessionLogger:
         self.telemetry_path: Path | None = None
         self._file = None
         self._writer = None
+        self.error: Exception | None = None
         if not config.enabled:
             return
         stamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S_%f")
@@ -90,27 +94,41 @@ class SessionLogger:
             self.last[side] = dict(signals)
         if self._writer is None:
             return
-        row: dict[str, Any] = {
-            "wall_time": datetime.now().astimezone().isoformat(timespec="milliseconds"),
-            "elapsed_s": now - self.started,
-            "phase": phase,
-            "side": side,
-            "connected": "" if connected is None else int(connected),
-            "tracked": "" if tracked is None else int(tracked),
-        }
-        for name in SIGNALS:
-            value = _value(signals.get(name))
-            row[name] = "" if value is None else json.dumps(value, separators=(",", ":"))
-        self._writer.writerow(row)
-        if now - self.last_flush >= self.flush_period_s:
-            self._file.flush()
-            self.last_flush = now
+        try:
+            row: dict[str, Any] = {
+                "wall_time": datetime.now().astimezone().isoformat(timespec="milliseconds"),
+                "elapsed_s": now - self.started,
+                "phase": phase,
+                "side": side,
+                "connected": "" if connected is None else int(connected),
+                "tracked": "" if tracked is None else int(tracked),
+            }
+            for name in SIGNALS:
+                value = _value(signals.get(name))
+                row[name] = "" if value is None else json.dumps(value, separators=(",", ":"))
+            self._writer.writerow(row)
+            if now - self.last_flush >= self.flush_period_s:
+                self._file.flush()
+                self.last_flush = now
+        except Exception as exc:
+            self._stop(exc)
+
+    def _stop(self, error: Exception | None = None) -> None:
+        self.error = self.error or error
+        file = self._file
+        self._file = None
+        self._writer = None
+        if file is not None:
+            try:
+                file.flush()
+                file.close()
+            except Exception as exc:
+                self.error = self.error or exc
 
     def close(self, logger) -> None:
-        if self._file is not None:
-            self._file.flush()
-            self._file.close()
-            self._file = None
+        self._stop()
+        if self.error is not None:
+            logger.warning("telemetry logging stopped after error: %s", self.error)
         logger.info(
             "run summary duration=%.2fs samples=%d telemetry=%s",
             time.monotonic() - self.started,

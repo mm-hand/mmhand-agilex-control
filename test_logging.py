@@ -40,6 +40,27 @@ def test_session_log_records_control_and_diagnostics():
         assert messages[-1][0].startswith("final %s current_q=%s current_flange=%s pico=%s")
 
 
+def test_logging_failure_does_not_escape_control_loop():
+    warnings = []
+    logger = SimpleNamespace(
+        info=lambda *args: None,
+        warning=lambda *args: warnings.append(args),
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        session = SessionLogger(LogConfig(directory=directory), "dual_sim")
+
+        def fail(_row):
+            raise OSError("disk full")
+
+        session._writer = SimpleNamespace(writerow=fail)
+        session.record("teleop", "left", connected=True, tracked=True)
+        assert isinstance(session.error, OSError)
+        assert session._writer is None
+        session.close(logger)
+        assert warnings[0][0] == "telemetry logging stopped after error: %s"
+
+
 if __name__ == "__main__":
     test_session_log_records_control_and_diagnostics()
+    test_logging_failure_does_not_escape_control_loop()
     print("All logging tests passed.")
