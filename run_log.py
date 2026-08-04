@@ -40,6 +40,9 @@ def _value(value: Any) -> Any:
     fields = getattr(value, "_fields_", ())
     if fields:
         return {field: _value(getattr(value, field, None)) for field in fields}
+    attributes = getattr(value, "__dict__", None)
+    if attributes is not None:
+        return {key: _value(item) for key, item in attributes.items() if not key.startswith("_")}
     array = np.asarray(value, dtype=float)
     if array.shape == (4, 4):
         quat = quat_xyzw_from_rotation_matrix(array[:3, :3])
@@ -116,8 +119,12 @@ class SessionLogger:
         )
         for side, sample in self.last.items():
             logger.info(
-                "final %s current_q=%s command_q=%s",
+                "final %s current_q=%s current_flange=%s pico=%s ik_q=%s ik_flange=%s command_q=%s",
                 side,
-                sample.get("current_q"),
-                sample.get("command_q"),
+                _value(sample.get("current_q")),
+                _value(sample.get("current_flange")),
+                _value(sample.get("pico_raw")),
+                _value(sample.get("ik_q")),
+                _value(sample.get("ik_flange")),
+                _value(sample.get("command_q")),
             )

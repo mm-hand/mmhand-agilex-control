@@ -12,11 +12,6 @@ from config import LogConfig
 from run_log import SessionLogger
 
 
-class DriverStatus:
-    _fields_ = ("enabled",)
-    enabled = True
-
-
 def test_session_log_records_control_and_diagnostics():
     messages = []
     logger = SimpleNamespace(info=lambda *args: messages.append(args))
@@ -34,7 +29,7 @@ def test_session_log_records_control_and_diagnostics():
             tracked=True,
             current_q=np.arange(7),
             command_q=np.ones(7),
-            diagnostics={"driver": DriverStatus()},
+            diagnostics={"driver": SimpleNamespace(enabled=True)},
         )
         session.close(logger)
 
@@ -42,7 +37,7 @@ def test_session_log_records_control_and_diagnostics():
         assert [row["phase"] for row in rows] == ["startup_move", "teleop"]
         assert json.loads(rows[1]["current_q"]) == list(range(7))
         assert json.loads(rows[1]["diagnostics"])["driver"]["enabled"] is True
-        assert messages[-1][0] == "final %s current_q=%s command_q=%s"
+        assert messages[-1][0].startswith("final %s current_q=%s current_flange=%s pico=%s")
 
 
 if __name__ == "__main__":
