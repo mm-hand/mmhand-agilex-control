@@ -48,6 +48,7 @@ class OneEuroConfig:
     d_cutoff: float = 1.0
 @dataclass(frozen=True)
 class InputLimiterConfig:
+    enabled: bool = True
     max_linear_speed_m_s: float = 1.0
     max_angular_speed_rad_s: float = 4.0
     max_position_step_m: float = 0.04
@@ -67,10 +68,14 @@ class MotionConfig:
     max_joint_step_rad: float = 0.02
     max_velocity_rad_s: tuple[float, ...] = (0.8, 0.8, 1.0, 1.0, 1.2, 1.2, 1.2)
     max_acceleration_rad_s2: tuple[float, ...] = (2.0, 2.0, 2.5, 2.5, 3.0, 3.0, 3.0)
+    min_trajectory_duration_s: float = 0.2
+    max_trajectory_duration_s: float = 4.0
     joint_limit_margin_rad: float = 0.035
 @dataclass(frozen=True)
 class SimConfig:
     visual_z_offset_m: float = 0.6
+    show_horizon_frame: bool = True
+    horizon_frame_axis_length_m: float = 0.18
     joint_log_period_s: float = 1.0
 @dataclass(frozen=True)
 class RealArmConfig:

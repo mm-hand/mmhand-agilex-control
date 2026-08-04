@@ -5,12 +5,16 @@ from config import MotionConfig
 from ik_solver import NeroParams
 def angle_diff(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return (a - b + np.pi) % (2.0 * np.pi) - np.pi
+def max_abs_angle_diff(a: np.ndarray, b: np.ndarray) -> float:
+    return float(np.max(np.abs(angle_diff(a, b))))
 def near_target(q: np.ndarray, target: np.ndarray) -> np.ndarray:
     return q - 2.0 * np.pi * np.round((q - target) / (2.0 * np.pi))
-def clip_to_joint_limits(q: np.ndarray, config: MotionConfig) -> np.ndarray:
+def joint_limits_with_margin(config: MotionConfig) -> tuple[np.ndarray, np.ndarray]:
     limits = np.asarray(NeroParams.default().joint_limits, dtype=float)
     margin = float(config.joint_limit_margin_rad)
-    lo, hi = limits[:, 0] + margin, limits[:, 1] - margin
+    return limits[:, 0] + margin, limits[:, 1] - margin
+def clip_to_joint_limits(q: np.ndarray, config: MotionConfig) -> np.ndarray:
+    lo, hi = joint_limits_with_margin(config)
     return np.clip(np.asarray(q, dtype=float).reshape(7), lo, hi)
 def _as_limit(values: tuple[float, ...], name: str) -> np.ndarray:
     arr = np.asarray(values, dtype=float).reshape(7)
@@ -62,7 +66,8 @@ def joint_trajectory(config: MotionConfig, q_start: np.ndarray, q_target: np.nda
     target = clip_to_joint_limits(near_target(np.asarray(q_target, dtype=float).reshape(7), planner.q), config)
     vmax = _as_limit(config.max_velocity_rad_s, "max_velocity_rad_s")
     amax = _as_limit(config.max_acceleration_rad_s2, "max_acceleration_rad_s2")
-    duration = np.max(np.abs(angle_diff(target, planner.q)) / vmax + 2.0 * vmax / amax) + 1.0
+    duration = float(np.max(np.abs(angle_diff(target, planner.q)) / vmax + 2.0 * vmax / amax) + 1.0)
+    duration = float(np.clip(duration, config.min_trajectory_duration_s, config.max_trajectory_duration_s))
     dt = 1.0 / config.command_hz
     points: list[np.ndarray] = []
     for step in range(int(np.ceil(duration / dt))):
@@ -70,3 +75,7 @@ def joint_trajectory(config: MotionConfig, q_start: np.ndarray, q_target: np.nda
         if np.max(np.abs(angle_diff(target, planner.q))) < 1e-6:
             return points
     raise RuntimeError("startup trajectory did not reach its target")
+
+def plan_joint_trajectory(config: MotionConfig, q_start: np.ndarray, q_target: np.ndarray) -> np.ndarray:
+    q0 = clip_to_joint_limits(q_start, config)
+    return np.vstack([q0, *joint_trajectory(config, q0, q_target)])

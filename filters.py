@@ -80,7 +80,7 @@ class PoseInputLimiter:
     def apply(self, pose: ControllerPose | None, t: float) -> ControllerPose | None:
         if pose is None:
             return None
-        if self.last_pose is None or self.last_t is None or t <= self.last_t:
+        if not self.config.enabled or self.last_pose is None or self.last_t is None or t <= self.last_t:
             self.last_pose = pose
             self.last_t = t
             return pose

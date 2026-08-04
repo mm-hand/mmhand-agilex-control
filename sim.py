@@ -31,8 +31,11 @@ class SwiftSimBackend:
         self.left_input, self.right_input, self.left_flange, self.right_flange, self.left_base, self.right_base = (
             Axes(0.05) for _ in range(6)
         )
+        self.horizon_frame = Axes(sim_config.horizon_frame_axis_length_m) if sim_config.show_horizon_frame else None
         self.left_base.T = swift_se3(bases.left, self.z_offset_m).A
         self.right_base.T = swift_se3(bases.right, self.z_offset_m).A
+        if self.horizon_frame is not None:
+            self.horizon_frame.T = swift_se3(np.eye(4), self.z_offset_m).A
         self.status_label = Label("pose input: starting...")
         self.items = (
             self.left_robot,
@@ -43,6 +46,7 @@ class SwiftSimBackend:
             self.right_flange,
             self.left_base,
             self.right_base,
+            *(() if self.horizon_frame is None else (self.horizon_frame,)),
             self.status_label,
         )
         self.env = Swift()

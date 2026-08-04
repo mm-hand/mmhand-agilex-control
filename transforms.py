@@ -35,6 +35,13 @@ def quat_xyzw_from_rotation_matrix(rotation: np.ndarray) -> np.ndarray:
         s = math.sqrt(1.0 + r[2, 2] - r[0, 0] - r[1, 1]) * 2.0
         quat = ((r[0, 2] + r[2, 0]) / s, (r[1, 2] + r[2, 1]) / s, 0.25 * s, (r[1, 0] - r[0, 1]) / s)
     return normalize_quat_xyzw(np.array(quat, dtype=float))
+def assert_rotation_matrix(rotation: np.ndarray, atol: float = 1e-6) -> None:
+    r = np.asarray(rotation, dtype=float).reshape(3, 3)
+    if not np.allclose(r.T @ r, np.eye(3), atol=atol):
+        raise ValueError("rotation matrix is not orthonormal")
+    determinant = float(np.linalg.det(r))
+    if not np.isclose(determinant, 1.0, atol=atol):
+        raise ValueError(f"rotation matrix determinant is {determinant}, expected +1")
 def rotation_matrix_from_rpy_deg(rpy_deg: tuple[float, float, float]) -> np.ndarray:
     r, p, y = (math.radians(v) for v in rpy_deg)
     cr, sr, cp, sp, cy, sy = math.cos(r), math.sin(r), math.cos(p), math.sin(p), math.cos(y), math.sin(y)
@@ -44,6 +51,7 @@ def rotation_matrix_from_rpy_deg(rpy_deg: tuple[float, float, float]) -> np.ndar
         [-sp, cp*sr, cp*cr],
     ], dtype=float)
 def transform_from_rotation_and_translation(rotation: np.ndarray, translation_m) -> np.ndarray:
+    assert_rotation_matrix(rotation)
     t = np.eye(4, dtype=float)
     t[:3, :3] = np.asarray(rotation, dtype=float).reshape(3, 3)
     t[:3, 3] = np.asarray(translation_m, dtype=float).reshape(3)
