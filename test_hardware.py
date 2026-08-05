@@ -21,9 +21,16 @@ class FakeRobot:
         self.motion_modes = []
         self.auto_modes = []
         self.normal_count = 0
+        self.feedback_timestamp = 1.0
 
     def get_joint_angles(self):
         return SimpleNamespace(msg=self.q.tolist())
+
+    def get_motor_states(self, index):
+        msg = SimpleNamespace(
+            position=float(self.q[index - 1]), velocity=0.0, current=float(index), torque=0.0
+        )
+        return SimpleNamespace(msg=msg, timestamp=self.feedback_timestamp)
 
     def set_motion_mode(self, mode):
         self.motion_modes.append(mode)
@@ -34,10 +41,12 @@ class FakeRobot:
     def move_js(self, joints):
         self.sent_js.append(list(joints))
         self.q = np.asarray(joints, dtype=float)
+        self.feedback_timestamp += 0.01
 
     def move_j(self, joints):
         self.sent_j.append(list(joints))
         self.q = np.asarray(joints, dtype=float)
+        self.feedback_timestamp += 0.01
 
     def set_normal_mode(self):
         self.normal_count += 1
@@ -105,13 +114,28 @@ def test_comparison_pose_error():
     assert np.isclose(rotation, 90.0)
 
 
-def test_real_backend_startup_uses_move_j_then_move_js():
+def test_real_backend_startup_then_servo_handoff():
     backend, robot = _backend("left")
     target = np.full(7, 0.001)
     backend.move_j_startup("left", target)
     assert robot.sent_j
-    assert robot.motion_modes[-2:] == ["j", "js"]
+    assert robot.motion_modes[-1] == "j"
     assert np.allclose(backend.q_feedback, target)
+    hold = backend.prepare_teleop()
+    assert robot.motion_modes[-1] == "js"
+    assert robot.sent_js
+    assert np.allclose(hold, target)
+
+
+def test_motor_feedback_contains_live_telemetry():
+    backend, robot = _backend("left")
+    robot.q = np.arange(7, dtype=float) * 0.1
+    robot.feedback_timestamp += 0.01
+    feedback = backend.sample_feedback()
+    assert feedback["fresh"]
+    assert feedback["source"] == "motor_states"
+    assert np.allclose(feedback["q"], robot.q)
+    assert np.allclose(feedback["current"], np.arange(1, 8))
 
 
 def test_sim_backend_follows_startup_trajectory():
@@ -155,7 +179,8 @@ if __name__ == "__main__":
     test_real_backend_right_side()
     test_real_backend_refreshes_feedback()
     test_comparison_pose_error()
-    test_real_backend_startup_uses_move_j_then_move_js()
+    test_real_backend_startup_then_servo_handoff()
+    test_motor_feedback_contains_live_telemetry()
     test_sim_backend_follows_startup_trajectory()
     test_startup_moves_active_arms_before_enter()
     print("All hardware tests passed.")

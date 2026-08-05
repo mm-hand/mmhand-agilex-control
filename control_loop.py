@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import select
+import sys
 import time
 
 import numpy as np
@@ -12,7 +14,6 @@ from frames import arm_base_in_horizon, build_coordinate_frames
 from ik import NeroIK
 from motion import ArmMotionPlanner
 from pose_io import PoseInputSubscriber
-from sim import SwiftSimBackend, replay_comparison
 
 
 def _json_safe(value):
@@ -74,7 +75,7 @@ def _log_ik_report(
 
 
 def _real_side(mode: str) -> str | None:
-    if mode in {"left_real", "left_real_compare"}:
+    if mode == "left_real":
         return "left"
     if mode == "right_real":
         return "right"
@@ -92,19 +93,33 @@ def _motion_step(planner: ArmMotionPlanner, target: np.ndarray | None, now: floa
     return planner.step(target, now)
 
 
-def _run_startup(config: ControlConfig, backend, use_left: bool, use_right: bool, wait=input) -> None:
+def _run_startup(config: ControlConfig, backend, use_left: bool, use_right: bool, wait=None, diagnostics=None) -> None:
     if not config.startup.enable_startup_pose:
+        if diagnostics is not None:
+            diagnostics.mark_enter()
         return
     if use_left:
         backend.move_j_startup("left", np.asarray(config.startup.left_pose_rad, dtype=float))
     if use_right:
         backend.move_j_startup("right", np.asarray(config.startup.right_pose_rad, dtype=float))
-    wait("startup pose reached; press Enter to start teleop...")
+    prompt = "startup pose reached; press Enter to start teleop..."
+    if wait is not None:
+        wait(prompt)
+    else:
+        print(prompt, end="", flush=True)
+        while True:
+            if hasattr(backend, "record_feedback"):
+                backend.record_feedback("waiting_enter")
+            if select.select([sys.stdin], [], [], 1.0 / config.motion.command_hz)[0]:
+                if sys.stdin.readline() == "":
+                    raise EOFError("stdin closed before teleop confirmation")
+                break
+        print()
+    if diagnostics is not None:
+        diagnostics.mark_enter()
 
 
-def run_control(config: ControlConfig, logger: logging.Logger) -> int:
-    compare = config.runtime.mode == "left_real_compare"
-    samples = []
+def run_control(config: ControlConfig, logger: logging.Logger, diagnostics=None) -> int:
     pose_input = PoseInputSubscriber(config.pose_input)
     backend = None
     try:
@@ -113,19 +128,36 @@ def run_control(config: ControlConfig, logger: logging.Logger) -> int:
         real_side = _real_side(config.runtime.mode)
         use_left = real_side is None or real_side == "left"
         use_right = real_side is None or real_side == "right"
+        bases = arm_base_in_horizon(config.frames)
+
+        if diagnostics is not None:
+            robot = left_ik.robot if real_side != "right" else right_ik.robot
+            base = bases.left if real_side != "right" else bases.right
+            diagnostics.set_fk(lambda q, robot=robot, base=base: base @ robot.fkine(q, end="revo2_flange").A)
+            diagnostics.record("connecting", event="control_initialized")
 
         if real_side is None:
-            bases = arm_base_in_horizon(config.frames)
+            from sim import SwiftSimBackend
+
             backend = SwiftSimBackend(left_ik.robot, right_ik.robot, bases, config.sim, config.motion, logger)
         else:
             from hardware import RealArmBackend
 
-            backend = RealArmBackend(real_side, config.real, config.motion, logger)
+            def sample_active_pose():
+                pose_input.spin()
+                return pose_input.get_left() if real_side == "left" else pose_input.get_right()
 
-        _run_startup(config, backend, use_left, use_right)
+            backend = RealArmBackend(
+                real_side, config.real, config.motion, logger,
+                diagnostics=diagnostics, pose_sampler=sample_active_pose,
+            )
+            backend.record_feedback("connected")
 
-        left_start = backend.q_feedback.copy() if real_side == "left" else left_ik.robot.q.copy()
-        right_start = backend.q_feedback.copy() if real_side == "right" else right_ik.robot.q.copy()
+        _run_startup(config, backend, use_left, use_right, diagnostics=diagnostics)
+
+        hold_q = backend.prepare_teleop() if real_side is not None else None
+        left_start = hold_q.copy() if real_side == "left" else left_ik.robot.q.copy()
+        right_start = hold_q.copy() if real_side == "right" else right_ik.robot.q.copy()
         if use_left:
             left_ik.reset_state(left_start)
         if use_right:
@@ -143,7 +175,6 @@ def run_control(config: ControlConfig, logger: logging.Logger) -> int:
         last_status = ""
         last_ik_log = [{"time": 0.0, "key": None}, {"time": 0.0, "key": None}]
         last_overrun_log = 0.0
-        started = time.monotonic()
         while True:
             tick_start = time.monotonic()
             pose_input.spin()
@@ -183,9 +214,18 @@ def run_control(config: ControlConfig, logger: logging.Logger) -> int:
                 flange = frames.left.transform_horizon_to_flange[:3, 3]
                 logger.info("L input=%s flange=%s", np.round(in_pos, 4), np.round(flange, 4))
 
-            backend.update(left_q, right_q, frames, status, dt)
-            if compare and left_raw is not None and left_q is not None:
-                samples.append((now - started, left_raw, left_q.copy(), backend.current_joints()))
+            feedback = backend.update(left_q, right_q, frames, status, dt)
+            if diagnostics is not None:
+                raw = left_raw if real_side != "right" else right_raw
+                filtered = left_pose if real_side != "right" else right_pose
+                target = left_target if real_side != "right" else right_target
+                command = left_q if real_side != "right" else right_q
+                arm_frames = frames.left if real_side != "right" else frames.right
+                diagnostics.record(
+                    "teleop", pico_raw=raw, pico_filtered=filtered, ik_q=target,
+                    command_q=command, feedback=feedback,
+                    target_flange=None if arm_frames is None else arm_frames.transform_horizon_to_flange,
+                )
             elapsed = time.monotonic() - tick_start
             if elapsed > dt and now - last_overrun_log > 1.0:
                 last_overrun_log = now
@@ -203,7 +243,4 @@ def run_control(config: ControlConfig, logger: logging.Logger) -> int:
         if backend is not None:
             backend.close()
         pose_input.close()
-    if compare:
-        logger.info("real arm disconnected; starting comparison replay")
-        replay_comparison(samples, config, logger)
     return 0

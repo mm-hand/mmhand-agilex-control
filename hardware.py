@@ -195,6 +195,8 @@ class RealArmBackend:
         motion_config: MotionConfig,
         logger: logging.Logger,
         robot_factory: Callable[[RealArmConfig, logging.Logger], object] | None = None,
+        diagnostics=None,
+        pose_sampler: Callable[[], object] | None = None,
     ) -> None:
         if side not in {"left", "right"}:
             raise ValueError(f"unsupported real arm side: {side}")
@@ -202,11 +204,16 @@ class RealArmBackend:
         self.config = real_config
         self.motion_config = motion_config
         self.logger = logger
+        self.diagnostics = diagnostics
+        self.pose_sampler = pose_sampler
         self.firmware = real_config.firmware
         self.robot = robot_factory(real_config, logger) if robot_factory else self._connect_robot()
         self.q_feedback = read_current_joint_angles(self.robot, real_config.startup_timeout_s)
-        prepare_motion_mode(self.robot, "move_js")
         self.last_sent_q = self.q_feedback.copy()
+        self.motor_feedback_valid: bool | None = None
+        self.motor_timestamps: np.ndarray | None = None
+        self.motor_updated_at = np.zeros(7, dtype=float)
+        self.sample_feedback()
 
     def _connect_robot(self):
         ensure_socketcan_ready(self.config)
@@ -233,15 +240,87 @@ class RealArmBackend:
         if max_abs_angle_diff(target, self.q_feedback) <= 1e-6:
             return
         prepare_motion_mode(self.robot, "move_j")
+        for point in plan_joint_trajectory(self.motion_config, self.q_feedback, target):
+            point = validate_joint_command(point)
+            self.robot.move_j([float(v) for v in point])
+            self.last_sent_q = point.copy()
+            self._record_command("startup", "move_j", point)
+            self.record_feedback("startup")
+            time.sleep(1.0 / self.motion_config.command_hz)
+        feedback = self.sample_feedback()
+        self.q_feedback = feedback["q"].copy() if feedback["fresh"] else target.copy()
+        self.last_sent_q = target.copy()
+
+    def _cached_feedback(self) -> dict:
+        values = read_joint_angles_optional(self.robot)
+        if values is not None:
+            self.q_feedback = validate_joint_command(values)
+        return {"q": self.q_feedback.copy(), "fresh": False, "source": "joint_angles_cache"}
+
+    def sample_feedback(self) -> dict:
+        packets = []
         try:
-            for point in plan_joint_trajectory(self.motion_config, self.q_feedback, target):
-                self.robot.move_j([float(v) for v in validate_joint_command(point)])
-                time.sleep(1.0 / self.motion_config.command_hz)
-            feedback = read_joint_angles_optional(self.robot)
-            self.q_feedback = np.asarray(feedback, dtype=float).reshape(7) if feedback is not None else target.copy()
-            self.last_sent_q = self.q_feedback.copy()
-        finally:
-            prepare_motion_mode(self.robot, "move_js")
+            packets = [self.robot.get_motor_states(index) for index in range(1, 8)]
+        except Exception:
+            return self._cached_feedback()
+        if any(packet is None or packet.msg is None for packet in packets):
+            return self._cached_feedback()
+
+        fields = {
+            name: np.asarray([float(getattr(packet.msg, name)) for packet in packets])
+            for name in ("position", "velocity", "current", "torque")
+        }
+        timestamps = np.asarray([float(packet.timestamp) for packet in packets])
+        if not all(np.all(np.isfinite(value)) for value in (*fields.values(), timestamps)) or np.any(timestamps <= 0.0):
+            return self._cached_feedback()
+
+        q = fields["position"]
+        if self.motor_feedback_valid is None:
+            delta = max_abs_angle_diff(q, self.q_feedback)
+            self.motor_feedback_valid = delta <= self.config.feedback_validation_max_delta_rad
+            if not self.motor_feedback_valid:
+                self.logger.warning("motor feedback rejected: joint-angle mismatch %.4frad", delta)
+        if not self.motor_feedback_valid:
+            return self._cached_feedback()
+
+        now = time.monotonic()
+        if self.motor_timestamps is None:
+            self.motor_updated_at[:] = now
+        else:
+            self.motor_updated_at[timestamps != self.motor_timestamps] = now
+        self.motor_timestamps = timestamps.copy()
+        self.q_feedback = q.copy()
+        return {
+            "q": q, "velocity": fields["velocity"], "current": fields["current"],
+            "torque": fields["torque"], "timestamps": timestamps,
+            "fresh": bool(np.all(now - self.motor_updated_at <= self.config.feedback_stale_s)),
+            "source": "motor_states",
+        }
+
+    def _record_command(self, phase: str, mode: str, q: np.ndarray) -> None:
+        if self.diagnostics is not None:
+            self.diagnostics.record(phase, event="command_sent", command_mode=mode, command_q=q)
+
+    def record_feedback(self, phase: str) -> dict:
+        feedback = self.sample_feedback()
+        if self.diagnostics is not None:
+            pico = self.pose_sampler() if self.pose_sampler is not None else None
+            self.diagnostics.record(phase, event="feedback", pico_raw=pico, feedback=feedback)
+        return feedback
+
+    def prepare_teleop(self) -> np.ndarray:
+        feedback = self.sample_feedback()
+        hold_q = feedback["q"].copy() if feedback["fresh"] else self.last_sent_q.copy()
+        prepare_motion_mode(self.robot, "move_js")
+        dt = 1.0 / self.motion_config.command_hz
+        for _ in range(max(1, int(np.ceil(self.config.servo_handoff_s / dt)))):
+            self.robot.move_js([float(v) for v in hold_q])
+            self.last_sent_q = hold_q.copy()
+            self._record_command("handoff", "move_js", hold_q)
+            self.record_feedback("handoff")
+            time.sleep(dt)
+        self.logger.info("servo handoff complete side=%s hold_q=%s", self.side, np.round(hold_q, 6))
+        return hold_q
 
     def update(
         self,
@@ -250,19 +329,19 @@ class RealArmBackend:
         frames: CoordinateFrames,
         status: str,
         dt: float,
-    ) -> None:
+    ) -> dict:
+        feedback = self.sample_feedback()
         q = left_q if self.side == "left" else right_q
         if q is None:
-            return
+            return feedback
         q = validate_joint_command(q)
         self.robot.move_js([float(v) for v in q])
         self.last_sent_q = q.copy()
+        self._record_command("teleop", "move_js", q)
+        return feedback
 
     def current_joints(self) -> np.ndarray:
-        feedback = read_joint_angles_optional(self.robot)
-        if feedback is not None:
-            self.q_feedback = validate_joint_command(feedback)
-        return self.q_feedback.copy()
+        return self.sample_feedback()["q"].copy()
 
     def close(self) -> None:
         try:

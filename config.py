@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class RuntimeConfig:
-    # dual_sim | left_real | left_real_compare | right_real | dual_real
-    mode: str = "left_real_compare"
+    # dual_sim | left_real | right_real | dual_real
+    mode: str = "left_real"
 
 
 @dataclass(frozen=True)
@@ -118,6 +118,9 @@ class RealArmConfig:
     enable_timeout_s: float = 5.0
     can_send_timeout_s: float = 0.05
     can_frame_interval_s: float = 0.005
+    servo_handoff_s: float = 0.2
+    feedback_stale_s: float = 0.1
+    feedback_validation_max_delta_rad: float = 0.15
     sdk_joint_limits_enabled: bool = False
 
 
