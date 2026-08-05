@@ -60,7 +60,7 @@ This creates generated C and `.so` files that are ignored by git. Do not edit ge
 
 All runtime parameters are centralized in `config.py`:
 
-- `RuntimeConfig`: `dual_sim`, `left_real`, `right_real`; `dual_real` is reserved.
+- `RuntimeConfig`: `dual_sim`, `left_real`, `left_real_compare`, `right_real`; `dual_real` is reserved.
 - `PoseInputConfig`: ROS node name, `/read_pose/*` topics, freshness timeouts.
 - `FrameTransformConfig`: shoulder/base/tool calibration and human-to-robot scale.
 - `IkConfig`: analytic IK scoring, branch switching gate, and arm-angle search.
@@ -94,6 +94,10 @@ With `StartupConfig.enable_startup_pose = True`, every active arm first follows 
 joint-space `move_j` trajectory to its configured startup pose. The program then
 waits for Enter before starting PICO tracking. This sequence is identical in
 simulation and real-arm modes.
+
+`left_real_compare` records the left-arm command and feedback. Press `Ctrl+C` to
+disconnect the real arm and automatically replay the same joint commands in
+Swift. The resulting end-effector comparison is saved under `comparisons/`.
 
 Logs are printed to the terminal. If `LogConfig.enable_file_log` is true, logs are also written under `logs/` inside this repository.
 

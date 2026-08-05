@@ -253,6 +253,12 @@ class RealArmBackend:
         self.robot.move_js([float(v) for v in q])
         self.last_sent_q = q.copy()
 
+    def current_joints(self) -> np.ndarray:
+        feedback = read_joint_angles_optional(self.robot)
+        if feedback is not None:
+            self.q_feedback = validate_joint_command(feedback)
+        return self.q_feedback.copy()
+
     def close(self) -> None:
         try:
             try:

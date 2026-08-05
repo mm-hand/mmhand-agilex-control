@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class RuntimeConfig:
-    # dual_sim | left_real | right_real | dual_real
-    mode: str = "left_real"
+    # dual_sim | left_real | left_real_compare | right_real | dual_real
+    mode: str = "left_real_compare"
 
 
 @dataclass(frozen=True)
@@ -127,6 +127,7 @@ class LogConfig:
     filename: str = "analytic_control.log"
     max_bytes: int = 2_000_000
     backup_count: int = 3
+    comparison_directory: str = "comparisons"
     ik_diagnostics_enabled: bool = True
     ik_failure_log_interval_s: float = 0.5
     ik_slow_solve_ms: float = 20.0

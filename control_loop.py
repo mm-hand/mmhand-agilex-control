@@ -12,7 +12,7 @@ from frames import arm_base_in_horizon, build_coordinate_frames
 from ik import NeroIK
 from motion import ArmMotionPlanner
 from pose_io import PoseInputSubscriber
-from sim import SwiftSimBackend
+from sim import SwiftSimBackend, replay_comparison
 
 
 def _json_safe(value):
@@ -74,7 +74,7 @@ def _log_ik_report(
 
 
 def _real_side(mode: str) -> str | None:
-    if mode == "left_real":
+    if mode in {"left_real", "left_real_compare"}:
         return "left"
     if mode == "right_real":
         return "right"
@@ -103,6 +103,8 @@ def _run_startup(config: ControlConfig, backend, use_left: bool, use_right: bool
 
 
 def run_control(config: ControlConfig, logger: logging.Logger) -> int:
+    compare = config.runtime.mode == "left_real_compare"
+    samples = []
     pose_input = PoseInputSubscriber(config.pose_input)
     backend = None
     try:
@@ -141,12 +143,15 @@ def run_control(config: ControlConfig, logger: logging.Logger) -> int:
         last_status = ""
         last_ik_log = [{"time": 0.0, "key": None}, {"time": 0.0, "key": None}]
         last_overrun_log = 0.0
+        started = time.monotonic()
         while True:
             tick_start = time.monotonic()
             pose_input.spin()
             now = time.monotonic()
-            left_pose = left_limiter.apply(left_filter.apply(pose_input.get_left(), now), now) if use_left else None
-            right_pose = right_limiter.apply(right_filter.apply(pose_input.get_right(), now), now) if use_right else None
+            left_raw = pose_input.get_left() if use_left else None
+            right_raw = pose_input.get_right() if use_right else None
+            left_pose = left_limiter.apply(left_filter.apply(left_raw, now), now) if use_left else None
+            right_pose = right_limiter.apply(right_filter.apply(right_raw, now), now) if use_right else None
             frames = build_coordinate_frames(left_pose, right_pose, config.frames)
 
             left_target = None
@@ -179,6 +184,8 @@ def run_control(config: ControlConfig, logger: logging.Logger) -> int:
                 logger.info("L input=%s flange=%s", np.round(in_pos, 4), np.round(flange, 4))
 
             backend.update(left_q, right_q, frames, status, dt)
+            if compare and left_raw is not None and left_q is not None:
+                samples.append((now - started, left_raw, left_q.copy(), backend.current_joints()))
             elapsed = time.monotonic() - tick_start
             if elapsed > dt and now - last_overrun_log > 1.0:
                 last_overrun_log = now
@@ -196,4 +203,7 @@ def run_control(config: ControlConfig, logger: logging.Logger) -> int:
         if backend is not None:
             backend.close()
         pose_input.close()
+    if compare:
+        logger.info("real arm disconnected; starting comparison replay")
+        replay_comparison(samples, config, logger)
     return 0

@@ -9,7 +9,7 @@ from config import ControlConfig, MotionConfig, RealArmConfig
 from control_loop import _run_startup
 from frames import CoordinateFrames
 from hardware import RealArmBackend, validate_joint_command
-from sim import SwiftSimBackend
+from sim import SwiftSimBackend, _comparison_error
 
 
 class FakeRobot:
@@ -88,6 +88,23 @@ def test_real_backend_right_side():
     backend.close()
 
 
+def test_real_backend_refreshes_feedback():
+    backend, robot = _backend("left")
+    robot.q = np.arange(7, dtype=float) * 0.1
+    assert np.allclose(backend.current_joints(), robot.q)
+
+
+def test_comparison_pose_error():
+    real = np.eye(4)
+    sim = np.eye(4)
+    assert _comparison_error(real, sim) == (0.0, 0.0)
+    sim[0, 3] = 0.1
+    sim[:3, :3] = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+    position, rotation = _comparison_error(real, sim)
+    assert np.isclose(position, 0.1)
+    assert np.isclose(rotation, 90.0)
+
+
 def test_real_backend_startup_uses_move_j_then_move_js():
     backend, robot = _backend("left")
     target = np.full(7, 0.001)
@@ -136,6 +153,8 @@ if __name__ == "__main__":
     test_validate_joint_command_rejects_nan()
     test_real_backend_sends_only_active_side()
     test_real_backend_right_side()
+    test_real_backend_refreshes_feedback()
+    test_comparison_pose_error()
     test_real_backend_startup_uses_move_j_then_move_js()
     test_sim_backend_follows_startup_trajectory()
     test_startup_moves_active_arms_before_enter()

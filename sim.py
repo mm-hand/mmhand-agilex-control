@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import csv
+import json
 import logging
 import time
+from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 from spatialmath import SE3
 from spatialgeometry import Axes
 
 from config import MotionConfig, SimConfig
-from frames import ArmBases, CoordinateFrames
+from frames import ArmBases, ControllerPose, CoordinateFrames, arm_base_in_horizon, build_coordinate_frames
 from motion import plan_joint_trajectory
 
 # Swift world is Z-up; input horizon is Y-up.
@@ -251,3 +255,65 @@ class SwiftSimBackend:
             self.env.close()
         except Exception:
             pass
+
+
+def _comparison_fk(robot, base: np.ndarray, q: np.ndarray) -> np.ndarray:
+    return base @ robot.fkine(q, end="revo2_flange").A
+
+
+def _comparison_error(real: np.ndarray, sim: np.ndarray) -> tuple[float, float]:
+    position = float(np.linalg.norm(real[:3, 3] - sim[:3, 3]))
+    cosine = np.clip((np.trace(real[:3, :3].T @ sim[:3, :3]) - 1.0) / 2.0, -1.0, 1.0)
+    return position, float(np.degrees(np.arccos(cosine)))
+
+
+def replay_comparison(samples: list[tuple[float, ControllerPose, np.ndarray, np.ndarray]], config, logger) -> None:
+    if not samples:
+        logger.info("comparison skipped: no valid tracked samples")
+        return
+
+    from ik import NeroIK
+
+    left, right = NeroIK(config.ik), NeroIK(config.ik)
+    bases = arm_base_in_horizon(config.frames)
+    rows = []
+    for elapsed, pico, command_q, real_q in samples:
+        real = _comparison_fk(left.robot, bases.left, real_q)
+        sim = _comparison_fk(left.robot, bases.left, command_q)
+        rows.append((elapsed, pico, command_q, real_q, real, sim, *_comparison_error(real, sim)))
+
+    directory = Path(config.log.comparison_directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{datetime.now():%Y%m%d_%H%M%S}_left.csv"
+    compact = lambda value: json.dumps(np.asarray(value, dtype=float).tolist(), separators=(",", ":"))
+    with path.open("w", newline="", encoding="utf-8") as output:
+        writer = csv.writer(output)
+        writer.writerow(("elapsed_s", "pico", "command_q", "real_q", "real_flange", "sim_flange", "position_error_m", "rotation_error_deg"))
+        for elapsed, pico, command_q, real_q, real, sim, position, rotation in rows:
+            writer.writerow((elapsed, compact((*pico.xyz_m, *pico.quat_xyzw)), compact(command_q), compact(real_q), compact(real), compact(sim), position, rotation))
+
+    position = np.asarray([row[-2] for row in rows])
+    rotation = np.asarray([row[-1] for row in rows])
+    logger.info("comparison samples=%d position_rms=%.2fmm max=%.2fmm rotation_rms=%.2fdeg max=%.2fdeg csv=%s", len(rows), 1000.0 * np.sqrt(np.mean(position**2)), 1000.0 * np.max(position), np.sqrt(np.mean(rotation**2)), np.max(rotation), path)
+
+    backend = None
+    try:
+        left.robot.q = rows[0][2].copy()
+        backend = SwiftSimBackend(left.robot, right.robot, bases, config.sim, config.motion, logger)
+        previous = rows[0][0]
+        for elapsed, pico, command_q, _real_q, real, _sim, position, rotation in rows:
+            tick = time.monotonic()
+            dt = max(elapsed - previous, 1.0 / config.motion.command_hz)
+            frames = build_coordinate_frames(pico, None, config.frames)
+            if frames.left is None:
+                continue
+            frames = CoordinateFrames(frames.left._replace(transform_horizon_to_flange=real), None)
+            backend.update(command_q, None, frames, f"real vs sim: {position * 1000.0:.1f} mm | {rotation:.1f} deg", dt)
+            previous = elapsed
+            time.sleep(max(0.0, dt - (time.monotonic() - tick)))
+        input("replay complete; press Enter to close Swift...")
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if backend is not None:
+            backend.close()
