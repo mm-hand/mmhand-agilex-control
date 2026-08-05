@@ -111,7 +111,7 @@ class RealArmConfig:
     interface: str = "socketcan"
     channel: str = "can0"
     bitrate: int = 1_000_000
-    firmware: str = "auto"
+    firmware: str = "default"
     speed_percent: int = 20
     startup_timeout_s: float = 3.0
     enable_timeout_s: float = 5.0
