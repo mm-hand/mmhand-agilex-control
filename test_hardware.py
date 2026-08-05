@@ -21,8 +21,8 @@ class FakeRobot:
         self.timestamp = 0.0
         self.diagnostic_reads = 0
 
+    # Nero 1.10 may keep this timestamp static while updating msg.
     def get_joint_angles(self):
-        self.timestamp += 1.0
         return SimpleNamespace(msg=self.q.copy(), timestamp=self.timestamp)
     def get_motor_states(self, joint):
         self.diagnostic_reads += 1
