@@ -200,8 +200,6 @@ class RealArmBackend:
         self.firmware = real_config.firmware
         self.robot = robot_factory(real_config, logger) if robot_factory else self._connect_robot()
         self.q_feedback = read_current_joint_angles(self.robot, real_config.startup_timeout_s)
-        if real_config.move_to_startup_pose:
-            self.q_feedback = self._move_to_startup_pose(self.q_feedback)
         prepare_motion_mode(self.robot, "move_js")
         self.last_sent_q = self.q_feedback.copy()
 
@@ -223,19 +221,20 @@ class RealArmBackend:
         self.logger.info("connected Nero real arm side=%s channel=%s firmware=%s", self.side, self.config.channel, firmware)
         return robot
 
-    def _move_to_startup_pose(self, q_start: np.ndarray) -> np.ndarray:
-        target = np.asarray(self.config.startup_pose_rad, dtype=float).reshape(7)
-        if max_abs_angle_diff(target, q_start) <= self.config.startup_pose_tolerance_rad:
-            return q_start
-        if self.config.require_enter_before_startup_move:
-            input(f"Workspace clear? Press Enter to move {self.side} arm to startup pose.")
+    def move_j_startup(self, side: str, q: np.ndarray) -> None:
+        if side != self.side:
+            raise ValueError(f"{side} arm is not connected")
+        target = np.asarray(q, dtype=float).reshape(7)
+        if max_abs_angle_diff(target, self.q_feedback) <= 1e-6:
+            return
         prepare_motion_mode(self.robot, "move_j")
         try:
-            for q in plan_joint_trajectory(self.motion_config, q_start, target):
-                self.robot.move_j([float(v) for v in validate_joint_command(q)])
+            for point in plan_joint_trajectory(self.motion_config, self.q_feedback, target):
+                self.robot.move_j([float(v) for v in validate_joint_command(point)])
                 time.sleep(1.0 / self.motion_config.command_hz)
             feedback = read_joint_angles_optional(self.robot)
-            return np.asarray(feedback, dtype=float).reshape(7) if feedback is not None else target
+            self.q_feedback = np.asarray(feedback, dtype=float).reshape(7) if feedback is not None else target.copy()
+            self.last_sent_q = self.q_feedback.copy()
         finally:
             prepare_motion_mode(self.robot, "move_js")
 

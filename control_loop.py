@@ -92,6 +92,16 @@ def _motion_step(planner: ArmMotionPlanner, target: np.ndarray | None, now: floa
     return planner.step(target, now)
 
 
+def _run_startup(config: ControlConfig, backend, use_left: bool, use_right: bool, wait=input) -> None:
+    if not config.startup.enable_startup_pose:
+        return
+    if use_left:
+        backend.move_j_startup("left", np.asarray(config.startup.left_pose_rad, dtype=float))
+    if use_right:
+        backend.move_j_startup("right", np.asarray(config.startup.right_pose_rad, dtype=float))
+    wait("startup pose reached; press Enter to start teleop...")
+
+
 def run_control(config: ControlConfig, logger: logging.Logger) -> int:
     pose_input = PoseInputSubscriber(config.pose_input)
     backend = None
@@ -99,27 +109,25 @@ def run_control(config: ControlConfig, logger: logging.Logger) -> int:
         left_ik = NeroIK(config.ik)
         right_ik = NeroIK(config.ik)
         real_side = _real_side(config.runtime.mode)
+        use_left = real_side is None or real_side == "left"
+        use_right = real_side is None or real_side == "right"
 
         if real_side is None:
             bases = arm_base_in_horizon(config.frames)
-            backend = SwiftSimBackend(left_ik.robot, right_ik.robot, bases, config.sim, logger)
-            left_start = left_ik.robot.q.copy()
-            right_start = right_ik.robot.q.copy()
+            backend = SwiftSimBackend(left_ik.robot, right_ik.robot, bases, config.sim, config.motion, logger)
         else:
             from hardware import RealArmBackend
 
             backend = RealArmBackend(real_side, config.real, config.motion, logger)
-            left_start = left_ik.robot.q.copy()
-            right_start = right_ik.robot.q.copy()
-            if real_side == "left":
-                left_start = backend.q_feedback.copy()
-                left_ik.reset_state(left_start)
-            else:
-                right_start = backend.q_feedback.copy()
-                right_ik.reset_state(right_start)
 
-        use_left = real_side is None or real_side == "left"
-        use_right = real_side is None or real_side == "right"
+        _run_startup(config, backend, use_left, use_right)
+
+        left_start = backend.q_feedback.copy() if real_side == "left" else left_ik.robot.q.copy()
+        right_start = backend.q_feedback.copy() if real_side == "right" else right_ik.robot.q.copy()
+        if use_left:
+            left_ik.reset_state(left_start)
+        if use_right:
+            right_ik.reset_state(right_start)
 
         left_filter = PoseFilter(config.filters.pose)
         right_filter = PoseFilter(config.filters.pose)

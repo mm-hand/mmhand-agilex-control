@@ -7,8 +7,9 @@ import numpy as np
 from spatialmath import SE3
 from spatialgeometry import Axes
 
-from config import SimConfig
+from config import MotionConfig, SimConfig
 from frames import ArmBases, CoordinateFrames
+from motion import plan_joint_trajectory
 
 # Swift world is Z-up; input horizon is Y-up.
 # Swift_X = hX, Swift_Y = -hZ, Swift_Z = hY.
@@ -164,11 +165,12 @@ def _reemit_scene(env, items, is_connected) -> None:
 
 
 class SwiftSimBackend:
-    def __init__(self, left_robot, right_robot, bases: ArmBases, sim_config: SimConfig, logger: logging.Logger) -> None:
+    def __init__(self, left_robot, right_robot, bases: ArmBases, sim_config: SimConfig, motion_config: MotionConfig, logger: logging.Logger) -> None:
         from swift import Swift
         from swift.SwiftElement import Label
 
         self.logger = logger
+        self.motion_config = motion_config
         self.z_offset_m = sim_config.visual_z_offset_m
         self.browser_reconnected, self.drain_queues, self.is_connected = _patch_swift_reconnect_leak()
 
@@ -205,6 +207,17 @@ class SwiftSimBackend:
         for item in self.items:
             self.env.add(item)
         self.logger.info("swift ready")
+
+    def move_j_startup(self, side: str, q: np.ndarray) -> None:
+        robot = self.left_robot if side == "left" else self.right_robot if side == "right" else None
+        if robot is None:
+            raise ValueError(f"unsupported arm side: {side}")
+        dt = 1.0 / self.motion_config.command_hz
+        self.status_label.desc = f"moving {side} arm to startup pose"
+        for point in plan_joint_trajectory(self.motion_config, robot.q, q):
+            robot.q = point
+            self.env.step(dt)
+            time.sleep(dt)
 
     def update(
         self,

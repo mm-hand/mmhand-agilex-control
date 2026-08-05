@@ -65,8 +65,9 @@ All runtime parameters are centralized in `config.py`:
 - `FrameTransformConfig`: shoulder/base/tool calibration and human-to-robot scale.
 - `IkConfig`: analytic IK scoring, branch switching gate, and arm-angle search.
 - `FilterConfig`: One Euro pose filter plus VR input speed/step limiter.
+- `StartupConfig`: startup enable flag and the left/right seven-joint startup poses.
 - `MotionConfig`: online joint servo limits plus startup `jtraj` duration limits.
-- `RealArmConfig`: `pyAgxArm` SDK path, SocketCAN, startup pose, SDK speed, and send timing.
+- `RealArmConfig`: `pyAgxArm` SDK path, SocketCAN, SDK speed, and send timing.
 - `LogConfig`: terminal logging is always enabled; file logging can be disabled here.
 
 ## Run
@@ -88,6 +89,11 @@ sudo ip link set can0 down
 sudo ip link set can0 type can bitrate 1000000
 sudo ip link set can0 up
 ```
+
+With `StartupConfig.enable_startup_pose = True`, every active arm first follows a
+joint-space `move_j` trajectory to its configured startup pose. The program then
+waits for Enter before starting PICO tracking. This sequence is identical in
+simulation and real-arm modes.
 
 Logs are printed to the terminal. If `LogConfig.enable_file_log` is true, logs are also written under `logs/` inside this repository.
 

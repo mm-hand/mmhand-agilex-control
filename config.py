@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 @dataclass(frozen=True)
 class RuntimeConfig:
     # dual_sim | left_real | right_real | dual_real
-    mode: str = "dual_sim"
+    mode: str = "left_real"
 
 
 @dataclass(frozen=True)
@@ -79,6 +79,13 @@ class FilterConfig:
 
 
 @dataclass(frozen=True)
+class StartupConfig:
+    left_pose_rad: tuple[float, ...] = (1.328929, 1.421239, -0.917729, 1.662461, -0.391128, 0.455112, -0.159994)
+    right_pose_rad: tuple[float, ...] = (1.328929, 1.421239, 2.223864, 1.662461, -0.391128, 0.455112, -0.159994)
+    enable_startup_pose: bool = True
+
+
+@dataclass(frozen=True)
 class MotionConfig:
     # Online joint servo. It follows the newest IK target every tick while
     # enforcing joint velocity, acceleration, and per-tick step limits.
@@ -111,10 +118,6 @@ class RealArmConfig:
     can_send_timeout_s: float = 0.05
     can_frame_interval_s: float = 0.005
     sdk_joint_limits_enabled: bool = False
-    move_to_startup_pose: bool = True
-    require_enter_before_startup_move: bool = True
-    startup_pose_rad: tuple[float, ...] = (-1.410645, 1.676232, -1.185393, 1.719429, -0.698777, -0.164131, -0.350829)
-    startup_pose_tolerance_rad: float = 0.017453293
 
 
 @dataclass(frozen=True)
@@ -137,6 +140,7 @@ class ControlConfig:
     frames: FrameTransformConfig = field(default_factory=FrameTransformConfig)
     ik: IkConfig = field(default_factory=IkConfig)
     filters: FilterConfig = field(default_factory=FilterConfig)
+    startup: StartupConfig = field(default_factory=StartupConfig)
     motion: MotionConfig = field(default_factory=MotionConfig)
     sim: SimConfig = field(default_factory=SimConfig)
     real: RealArmConfig = field(default_factory=RealArmConfig)
