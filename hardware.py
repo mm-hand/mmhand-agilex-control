@@ -71,30 +71,35 @@ def create_robot(config: RealArmConfig, firmware: str):
         bitrate=config.bitrate,
     )
     robot = AgxArmFactory.create_arm(cfg)
-    robot.connect()
+    try:
+        robot.connect()
+    except Exception:
+        robot.disconnect()
+        raise
     return robot
 
 
 def detect_firmware(config: RealArmConfig, logger: logging.Logger) -> str:
-    robot = None
+    robot = create_robot(config, "default")
+    deadline = time.monotonic() + config.enable_timeout_s
+    last_error = None
     try:
-        robot = create_robot(config, "default")
-        fw = robot.get_firmware(timeout=1.0, min_interval=0.0)
-        if not fw:
-            logger.info("firmware auto-detect timed out; using default")
-            return "default"
-        software_version = str(fw.get("software_version", "")).strip()
-        version = _parse_version_tuple(software_version)
-        if version >= (1, 20):
-            return "v120"
-        if version >= (1, 12):
-            return "v112"
-        if version >= (1, 11):
-            return "v111"
-        return "default"
+        while time.monotonic() < deadline:
+            try:
+                fw = robot.get_firmware(timeout=0.3, min_interval=0.0)
+                if fw:
+                    software = str(fw.get("software_version", "")).strip()
+                    version = _parse_version_tuple(software)
+                    driver = "v120" if version >= (1, 20) else "v112" if version >= (1, 12) else "v111" if version >= (1, 11) else "default"
+                    logger.info("detected Nero firmware=%s driver=%s", software, driver)
+                    return driver
+                robot.enable()
+            except Exception as exc:
+                last_error = exc
+            time.sleep(0.05)
     finally:
-        if robot is not None:
-            robot.disconnect()
+        robot.disconnect()
+    raise RuntimeError("timed out detecting Nero firmware; check CAN feedback or set RealArmConfig.firmware explicitly") from last_error
 
 
 def install_can_send_timeout(robot, timeout_s: float | None) -> None:
