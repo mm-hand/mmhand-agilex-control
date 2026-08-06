@@ -136,26 +136,43 @@ def read_joint_feedback_optional(robot) -> np.ndarray | None:
         return None
     return q
 
-def read_joint_angles_optional(robot) -> list[float] | None:
-    feedback = read_joint_feedback_optional(robot)
-    return None if feedback is None else feedback.tolist()
+def read_motor_feedback_optional(robot) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    try:
+        packets = [robot.get_motor_states(joint) for joint in range(1, 8)]
+    except Exception:
+        return None
+    if any(packet is None or packet.msg is None for packet in packets):
+        return None
+    q = np.asarray([packet.msg.position for packet in packets], dtype=float)
+    timestamps = np.asarray([getattr(packet, "timestamp", 0.0) for packet in packets], dtype=float)
+    hz = np.asarray([getattr(packet, "hz", 0.0) for packet in packets], dtype=float)
+    if not all(np.all(np.isfinite(values)) for values in (q, timestamps, hz)):
+        return None
+    return q, timestamps, hz
 
-def read_joint_feedback(robot, timeout_s: float) -> np.ndarray:
+def read_motor_feedback(robot, timeout_s: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     deadline = time.monotonic() + timeout_s
+    previous = None
     while time.monotonic() < deadline:
-        feedback = read_joint_feedback_optional(robot)
+        feedback = read_motor_feedback_optional(robot)
         if feedback is not None:
-            return feedback
+            q, timestamps, hz = feedback
+            live = hz > 0.0
+            if previous is not None:
+                live |= timestamps != previous
+            if np.all(live):
+                return q, timestamps, hz
+            previous = timestamps
         time.sleep(0.02)
-    raise RuntimeError("timed out waiting for live joint feedback")
+    raise RuntimeError("timed out waiting for live motor feedback")
 
 def read_current_joint_angles(robot, timeout_s: float) -> np.ndarray:
-    return read_joint_feedback(robot, timeout_s)
+    return read_motor_feedback(robot, timeout_s)[0]
 
 def wait_for_feedback(robot, timeout_s: float) -> bool:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        if read_joint_angles_optional(robot) is not None or robot.get_arm_status() is not None:
+        if read_motor_feedback_optional(robot) is not None or robot.get_arm_status() is not None:
             return True
         time.sleep(0.02)
     return False
@@ -223,10 +240,14 @@ class RealArmBackend:
         self.logger = logger
         self.robot, self.firmware = robot_factory(real_config, logger) if robot_factory else self._connect_robot()
         try:
-            self.q_feedback = read_joint_feedback(self.robot, real_config.startup_timeout_s)
+            self.q_feedback, self.motor_timestamps, _ = read_motor_feedback(
+                self.robot, real_config.startup_timeout_s
+            )
         except Exception:
             self.robot.disconnect()
             raise
+        self.motor_updated_at = np.full(7, time.monotonic())
+        self.feedback_warning = False
         self.last_sent_q = self.q_feedback.copy()
         self.js_active = False
         self.next_diagnostics_at = 0.0
@@ -256,12 +277,19 @@ class RealArmBackend:
             self.robot.move_j([float(v) for v in q_cmd])
             self.last_sent_q = q_cmd.copy()
             time.sleep(dt)
-        self.q_feedback = read_joint_feedback(self.robot, self.config.startup_timeout_s)
+        self._wait_for_motor_feedback()
     def prepare_teleop(self, side: str) -> np.ndarray:
         if side != self.side:
             raise ValueError(f"{side} arm is not connected")
-        hold_q = read_joint_feedback(self.robot, self.config.startup_timeout_s)
-        self.q_feedback = hold_q.copy()
+        hold_q = self._wait_for_motor_feedback()
+        # Nero's assembled joint-angle cache can stall, so it is diagnostic-only here.
+        aggregate = read_joint_feedback_optional(self.robot)
+        delta = None if aggregate is None else float(np.max(np.abs(hold_q - aggregate)))
+        self.logger.info(
+            "servo feedback side=%s motor_q=%s aggregate_q=%s aggregate_delta_rad=%s",
+            self.side, np.array2string(hold_q, precision=6),
+            None if aggregate is None else np.array2string(aggregate, precision=6), delta,
+        )
         self._set_servo_mode()
         dt = 1.0 / self.motion_config.command_hz
         cycles = max(1, int(np.ceil(self.config.servo_handoff_s / dt)))
@@ -281,12 +309,34 @@ class RealArmBackend:
         if side != self.side:
             raise ValueError(f"{side} arm is not connected")
         if wait:
-            self.q_feedback = read_joint_feedback(self.robot, self.config.startup_timeout_s)
+            self._wait_for_motor_feedback()
         return self.q_feedback.copy()
+    def _wait_for_motor_feedback(self) -> np.ndarray:
+        q, self.motor_timestamps, _ = read_motor_feedback(self.robot, self.config.startup_timeout_s)
+        self.motor_updated_at[:] = time.monotonic()
+        self.q_feedback = q
+        self.feedback_warning = False
+        return q.copy()
     def refresh_feedback(self) -> None:
-        feedback = read_joint_feedback_optional(self.robot)
-        if feedback is not None:
-            self.q_feedback = feedback
+        feedback = read_motor_feedback_optional(self.robot)
+        if feedback is None:
+            self._warn_feedback("missing or invalid motor packet")
+            return
+        q, timestamps, hz = feedback
+        now = time.monotonic()
+        self.motor_updated_at[(timestamps != self.motor_timestamps) | (hz > 0.0)] = now
+        self.motor_timestamps = timestamps
+        if np.any(now - self.motor_updated_at > self.config.feedback_stale_s):
+            self._warn_feedback("motor packet stream is stale")
+            return
+        if self.feedback_warning:
+            self.logger.info("motor feedback recovered side=%s", self.side)
+        self.feedback_warning = False
+        self.q_feedback = q
+    def _warn_feedback(self, reason: str) -> None:
+        if not self.feedback_warning:
+            self.logger.warning("motor feedback unavailable side=%s: %s; continuing", self.side, reason)
+            self.feedback_warning = True
     def update(self, left_q: np.ndarray | None, right_q: np.ndarray | None, frames: CoordinateFrames, status: str, dt: float) -> None:
         self.refresh_feedback()
         q = left_q if self.side == "left" else right_q

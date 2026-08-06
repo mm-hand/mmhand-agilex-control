@@ -91,6 +91,7 @@ class RealArmConfig:
     can_send_timeout_s: float = 0.05
     can_frame_interval_s: float = 0.005
     servo_handoff_s: float = 0.2
+    feedback_stale_s: float = 0.25
     diagnostics_hz: float = 5.0
     sdk_joint_limits_enabled: bool = False
 @dataclass(frozen=True)

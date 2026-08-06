@@ -18,7 +18,10 @@ class FakeRobot:
         self.auto_modes = []
         self.normal_count = 0
         self.q = np.zeros(7)
-        self.timestamp = 0.0
+        self.motor_q = np.zeros(7)
+        self.timestamp = 1.0
+        self.hz = 100.0
+        self.motor_available = True
         self.diagnostic_reads = 0
 
     # Nero 1.10 may keep this timestamp static while updating msg.
@@ -26,9 +29,11 @@ class FakeRobot:
         return SimpleNamespace(msg=self.q.copy(), timestamp=self.timestamp)
     def get_motor_states(self, joint):
         self.diagnostic_reads += 1
+        if not self.motor_available:
+            return None
         return SimpleNamespace(msg=SimpleNamespace(
-            position=0.1 * joint, velocity=0.0, current=float(joint), torque=0.0
-        ))
+            position=self.motor_q[joint - 1], velocity=0.0, current=float(joint), torque=0.0
+        ), timestamp=self.timestamp, hz=self.hz)
 
     def get_driver_states(self, joint):
         self.diagnostic_reads += 1
@@ -53,11 +58,13 @@ class FakeRobot:
 
     def move_js(self, joints):
         self.sent_js.append(list(joints))
-        self.q = np.asarray(joints, dtype=float)
+        self.motor_q = np.asarray(joints, dtype=float)
+        self.timestamp += 0.01
 
     def move_j(self, joints):
         self.sent_j.append(list(joints))
-        self.q = np.asarray(joints, dtype=float)
+        self.motor_q = np.asarray(joints, dtype=float)
+        self.timestamp += 0.01
 
     def set_normal_mode(self):
         self.normal_count += 1
@@ -73,7 +80,7 @@ def _backend(side="left"):
         side,
         cfg,
         MotionConfig(command_hz=1000.0),
-        SimpleNamespace(info=lambda *args, **kwargs: None),
+        SimpleNamespace(info=lambda *args, **kwargs: None, warning=lambda *args, **kwargs: None),
         robot_factory=lambda _cfg, _logger: (robot, "v120"),
     )
     return backend, robot
@@ -102,7 +109,7 @@ def test_real_backend_sends_only_active_side():
 def test_servo_handoff_holds_fresh_feedback():
     backend, robot = _backend("left")
     startup = np.linspace(0.1, 0.7, 7)
-    robot.q = startup.copy()
+    robot.motor_q = startup.copy()
     hold = backend.prepare_teleop("left")
     assert np.allclose(hold, startup)
     assert robot.motion_modes == ["js"]
@@ -126,11 +133,34 @@ def test_real_backend_right_side():
 
 def test_diagnostics_are_rate_limited():
     backend, robot = _backend("left")
+    robot.diagnostic_reads = 0
     diagnostics = backend.diagnostics()
     assert diagnostics["motors"][0]["current"] == 1.0
     assert robot.diagnostic_reads == 15
     assert backend.diagnostics() is None
     assert robot.diagnostic_reads == 15
+
+
+def test_motor_feedback_replaces_stale_joint_angles():
+    backend, robot = _backend("left")
+    robot.q = np.full(7, -1.0)
+    robot.motor_q = np.arange(7, dtype=float) * 0.1
+    backend.refresh_feedback()
+    assert np.allclose(backend.current_joints("left"), robot.motor_q)
+
+
+def test_stale_motor_feedback_keeps_last_valid_angles():
+    backend, robot = _backend("left")
+    valid = np.arange(7, dtype=float) * 0.1
+    robot.motor_q = valid
+    backend.refresh_feedback()
+    robot.hz = 0.0
+    robot.motor_q = np.full(7, 2.0)
+    backend.motor_updated_at -= backend.config.feedback_stale_s + 0.01
+    backend.refresh_feedback()
+    assert np.allclose(backend.current_joints("left"), valid)
+    backend.update(np.full(7, 0.2), None, CoordinateFrames(left=None, right=None), "ok", 0.02)
+    assert np.allclose(robot.sent_js[-1], 0.2)
 
 
 if __name__ == "__main__":
@@ -140,4 +170,6 @@ if __name__ == "__main__":
     test_startup_move_refreshes_feedback()
     test_real_backend_right_side()
     test_diagnostics_are_rate_limited()
+    test_motor_feedback_replaces_stale_joint_angles()
+    test_stale_motor_feedback_keeps_last_valid_angles()
     print("All hardware tests passed.")
