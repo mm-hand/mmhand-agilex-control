@@ -127,15 +127,6 @@ def install_can_frame_interval(robot, interval_s: float) -> None:
                 time.sleep(interval_s)
     robot._send_msgs = MethodType(delayed_send_msgs, robot)
 
-def read_joint_feedback_optional(robot) -> np.ndarray | None:
-    msg = robot.get_joint_angles()
-    if msg is None or msg.msg is None:
-        return None
-    q = np.asarray(msg.msg, dtype=float).reshape(7)
-    if not np.all(np.isfinite(q)):
-        return None
-    return q
-
 def read_motor_feedback_optional(robot) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
     try:
         packets = [robot.get_motor_states(joint) for joint in range(1, 8)]
@@ -281,15 +272,8 @@ class RealArmBackend:
     def prepare_teleop(self, side: str) -> np.ndarray:
         if side != self.side:
             raise ValueError(f"{side} arm is not connected")
-        hold_q = self._latest_motor_feedback()
-        # Nero's assembled joint-angle cache can stall, so it is diagnostic-only here.
-        aggregate = read_joint_feedback_optional(self.robot)
-        delta = None if aggregate is None else float(np.max(np.abs(hold_q - aggregate)))
-        self.logger.info(
-            "servo feedback side=%s motor_q=%s aggregate_q=%s aggregate_delta_rad=%s",
-            self.side, np.array2string(hold_q, precision=6),
-            None if aggregate is None else np.array2string(aggregate, precision=6), delta,
-        )
+        fresh = self.refresh_feedback()
+        hold_q = self.q_feedback.copy() if fresh else self.last_sent_q.copy()
         self._set_servo_mode()
         dt = 1.0 / self.motion_config.command_hz
         cycles = max(1, int(np.ceil(self.config.servo_handoff_s / dt)))
@@ -304,7 +288,7 @@ class RealArmBackend:
             self.side,
             np.array2string(hold_q, precision=6),
         )
-        return self.q_feedback.copy()
+        return hold_q
     def current_joints(self, side: str, wait: bool = False) -> np.ndarray:
         if side != self.side:
             raise ValueError(f"{side} arm is not connected")
@@ -321,22 +305,23 @@ class RealArmBackend:
         self.q_feedback = q
         self.feedback_warning = False
         return q.copy()
-    def refresh_feedback(self) -> None:
+    def refresh_feedback(self) -> bool:
         feedback = read_motor_feedback_optional(self.robot)
         if feedback is None:
             self._warn_feedback("missing or invalid motor packet")
-            return
+            return False
         q, timestamps, hz = feedback
         now = time.monotonic()
         self.motor_updated_at[(timestamps != self.motor_timestamps) | (hz > 0.0)] = now
         self.motor_timestamps = timestamps
         if np.any(now - self.motor_updated_at > self.config.feedback_stale_s):
             self._warn_feedback("motor packet stream is stale")
-            return
+            return False
         if self.feedback_warning:
             self.logger.info("motor feedback recovered side=%s", self.side)
         self.feedback_warning = False
         self.q_feedback = q
+        return True
     def _warn_feedback(self, reason: str) -> None:
         if not self.feedback_warning:
             self.logger.warning("motor feedback unavailable side=%s: %s; continuing", self.side, reason)

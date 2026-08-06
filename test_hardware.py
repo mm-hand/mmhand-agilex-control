@@ -115,6 +115,36 @@ def test_servo_handoff_holds_fresh_feedback():
     assert robot.motion_modes == ["js"]
     assert np.allclose(robot.sent_js[0], startup)
 
+
+def test_servo_handoff_uses_last_command_when_feedback_is_stale():
+    backend, robot = _backend("left")
+    expected = np.linspace(0.1, 0.7, 7)
+    backend.last_sent_q = expected.copy()
+    robot.hz = 0.0
+    robot.motor_q = np.full(7, 2.0)
+    backend.motor_updated_at -= backend.config.feedback_stale_s + 0.01
+    hold = backend.prepare_teleop("left")
+    assert np.allclose(hold, expected)
+    assert np.allclose(robot.sent_js[0], expected)
+
+
+def test_servo_handoff_returns_the_command_it_holds():
+    backend, robot = _backend("left")
+    expected = np.linspace(0.1, 0.7, 7)
+    observed = np.linspace(-0.7, -0.1, 7)
+    robot.motor_q = expected.copy()
+
+    def move_js(joints):
+        robot.sent_js.append(list(joints))
+        robot.motor_q = observed.copy()
+        robot.timestamp += 0.01
+
+    robot.move_js = move_js
+    hold = backend.prepare_teleop("left")
+    assert np.allclose(robot.sent_js[0], expected)
+    assert np.allclose(hold, expected)
+
+
 def test_startup_move_refreshes_feedback():
     backend, robot = _backend("left")
     target = np.full(7, 0.001)
@@ -176,6 +206,8 @@ if __name__ == "__main__":
     test_validate_joint_command_rejects_nan()
     test_real_backend_sends_only_active_side()
     test_servo_handoff_holds_fresh_feedback()
+    test_servo_handoff_uses_last_command_when_feedback_is_stale()
+    test_servo_handoff_returns_the_command_it_holds()
     test_startup_move_refreshes_feedback()
     test_startup_does_not_require_reaching_target_or_fresh_timestamp()
     test_real_backend_right_side()

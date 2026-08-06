@@ -1,5 +1,7 @@
 from __future__ import annotations
 import logging
+import select
+import sys
 import time
 import numpy as np
 from config import ControlConfig
@@ -20,6 +22,17 @@ def _real_side(mode: str) -> str | None:
     raise ValueError(f"unknown runtime mode: {mode}")
 def _startup_pose(config: ControlConfig, side: str) -> np.ndarray:
     return np.asarray(getattr(config.startup, f"{side}_pose_rad"), dtype=float).reshape(7)
+def _wait_for_enter(pose_input, backend, real_side: str | None, command_hz: float) -> None:
+    print("startup pose reached; press Enter to start teleop...", end="", flush=True)
+    while True:
+        pose_input.spin()
+        if real_side is not None:
+            backend.refresh_feedback()
+        if select.select([sys.stdin], [], [], 1.0 / command_hz)[0]:
+            if sys.stdin.readline() == "":
+                raise EOFError("stdin closed before teleop confirmation")
+            print()
+            return
 def _motion_step(planner: ArmMotionPlanner, target: np.ndarray | None, now: float) -> np.ndarray | None:
     if target is None:
         planner.step(None, now)
@@ -80,7 +93,7 @@ def run_control(config: ControlConfig, logger: logging.Logger, session: SessionL
                 session.event("startup_move", "right", command_q=startup)
                 backend.move_j_startup("right", startup)
                 session.event("startup_reached", "right", current_q=backend.current_joints("right"))
-            input("startup pose reached; press Enter to start teleop...")
+            _wait_for_enter(pose_input, backend, real_side, config.motion.command_hz)
         left_start = backend.prepare_teleop("left") if use_left else left_ik.robot.q.copy()
         right_start = backend.prepare_teleop("right") if use_right else right_ik.robot.q.copy()
         if use_left:
