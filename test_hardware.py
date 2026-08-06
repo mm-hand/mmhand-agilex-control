@@ -123,6 +123,15 @@ def test_startup_move_refreshes_feedback():
     assert robot.sent_j
     assert np.allclose(backend.q_feedback, target, atol=1e-6)
 
+def test_startup_does_not_require_reaching_target_or_fresh_timestamp():
+    backend, robot = _backend("left")
+    actual = np.full(7, 0.0005)
+    robot.hz = 0.0
+    robot.move_j = lambda joints: robot.sent_j.append(list(joints))
+    robot.motor_q = actual
+    backend.move_j_startup("left", np.full(7, 0.001))
+    assert np.allclose(backend.q_feedback, actual)
+
 def test_real_backend_right_side():
     backend, robot = _backend("right")
     frames = CoordinateFrames(left=None, right=None)
@@ -168,6 +177,7 @@ if __name__ == "__main__":
     test_real_backend_sends_only_active_side()
     test_servo_handoff_holds_fresh_feedback()
     test_startup_move_refreshes_feedback()
+    test_startup_does_not_require_reaching_target_or_fresh_timestamp()
     test_real_backend_right_side()
     test_diagnostics_are_rate_limited()
     test_motor_feedback_replaces_stale_joint_angles()

@@ -277,11 +277,11 @@ class RealArmBackend:
             self.robot.move_j([float(v) for v in q_cmd])
             self.last_sent_q = q_cmd.copy()
             time.sleep(dt)
-        self._wait_for_motor_feedback()
+        self._latest_motor_feedback()
     def prepare_teleop(self, side: str) -> np.ndarray:
         if side != self.side:
             raise ValueError(f"{side} arm is not connected")
-        hold_q = self._wait_for_motor_feedback()
+        hold_q = self._latest_motor_feedback()
         # Nero's assembled joint-angle cache can stall, so it is diagnostic-only here.
         aggregate = read_joint_feedback_optional(self.robot)
         delta = None if aggregate is None else float(np.max(np.abs(hold_q - aggregate)))
@@ -304,15 +304,19 @@ class RealArmBackend:
             self.side,
             np.array2string(hold_q, precision=6),
         )
-        return hold_q
+        return self.q_feedback.copy()
     def current_joints(self, side: str, wait: bool = False) -> np.ndarray:
         if side != self.side:
             raise ValueError(f"{side} arm is not connected")
         if wait:
-            self._wait_for_motor_feedback()
+            self._latest_motor_feedback()
         return self.q_feedback.copy()
-    def _wait_for_motor_feedback(self) -> np.ndarray:
-        q, self.motor_timestamps, _ = read_motor_feedback(self.robot, self.config.startup_timeout_s)
+    def _latest_motor_feedback(self) -> np.ndarray:
+        feedback = read_motor_feedback_optional(self.robot)
+        if feedback is None:
+            self._warn_feedback("missing or invalid motor packet")
+            return self.q_feedback.copy()
+        q, self.motor_timestamps, _ = feedback
         self.motor_updated_at[:] = time.monotonic()
         self.q_feedback = q
         self.feedback_warning = False
