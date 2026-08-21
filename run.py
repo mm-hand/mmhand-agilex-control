@@ -16,6 +16,9 @@ def main() -> int:
     logger.info("starting analytic_control mode=%s", config.runtime.mode)
     try:
         return run_control(config, logger, session)
+    except Exception:
+        logger.exception("analytic_control failed")
+        raise
     finally:
         session.close(logger)
 if __name__ == "__main__":

@@ -1,6 +1,9 @@
 from __future__ import annotations
+import json
 import logging
+import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from types import MethodType
@@ -8,6 +11,7 @@ from typing import Callable
 import numpy as np
 from config import MotionConfig, RealArmConfig
 from frames import CoordinateFrames
+from joint_feedback import JointFeedbackSample, read_feedback_sample
 from motion import joint_trajectory
 
 _FIRMWARE_NAMES = {"default", "v111", "v112", "v120"}
@@ -36,8 +40,15 @@ def _firmware_constant(config: RealArmConfig, firmware: str):
 
 def _firmware_name(version: str) -> str:
     try:
-        parsed = tuple(int(part) for part in version.strip().split(".")[:2])
-    except ValueError as exc:
+        text = version.strip().lower().removeprefix("v")
+        parts = text.split(".")
+        if len(parts) == 2:
+            parsed = tuple(int(part) for part in parts)
+        elif len(parts) == 3 and all(len(part) == 1 for part in parts):
+            parsed = (int(parts[0]), int(parts[1]) * 10 + int(parts[2]))
+        else:
+            raise ValueError
+    except (AttributeError, ValueError) as exc:
         raise RuntimeError(f"invalid Nero firmware version: {version!r}") from exc
     if parsed >= (1, 20):
         return "v120"
@@ -46,6 +57,39 @@ def _firmware_name(version: str) -> str:
     if parsed >= (1, 11):
         return "v111"
     return "default"
+
+def _socketcan_state(config: RealArmConfig) -> str | None:
+    if config.interface != "socketcan":
+        return None
+    try:
+        result = subprocess.run(
+            ["ip", "-details", "-json", "link", "show", config.channel],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=1.0,
+        )
+        links = json.loads(result.stdout)
+        return str(links[0]["linkinfo"]["info_data"]["state"]).upper()
+    except (IndexError, KeyError, OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"failed to inspect SocketCAN interface {config.channel!r}") from exc
+
+def _raise_for_can_fault(config: RealArmConfig) -> None:
+    state = _socketcan_state(config)
+    if state in {"ERROR-PASSIVE", "BUS-OFF", "STOPPED"}:
+        raise RuntimeError(
+            f"SocketCAN interface {config.channel!r} entered {state}; stop the arm program, "
+            "reset the CAN interface, and verify bitrate, H/L wiring, power, and passive RX traffic"
+        )
+
+def _log_sdk_identity(config: RealArmConfig, logger: logging.Logger) -> None:
+    _sdk(config)
+    import pyAgxArm
+    logger.info(
+        "using pyAgxArm sdk_version=%s path=%s",
+        getattr(pyAgxArm, "__version__", "unknown"),
+        Path(pyAgxArm.__file__).resolve(),
+    )
 
 def ensure_socketcan_ready(config: RealArmConfig) -> None:
     if config.interface != "socketcan":
@@ -60,6 +104,7 @@ def ensure_socketcan_ready(config: RealArmConfig) -> None:
             f"sudo ip link set {config.channel} type can bitrate {config.bitrate}; "
             f"sudo ip link set {config.channel} up"
         )
+    _raise_for_can_fault(config)
 
 def create_robot(config: RealArmConfig, firmware: str):
     AgxArmFactory, ArmModel, _, create_agx_arm_config = _sdk(config)
@@ -81,19 +126,31 @@ def create_robot(config: RealArmConfig, firmware: str):
 def detect_firmware(config: RealArmConfig, logger: logging.Logger) -> str:
     robot = create_robot(config, "default")
     deadline = time.monotonic() + config.enable_timeout_s
+    next_enable_at = time.monotonic()
     last_error: Exception | None = None
     try:
+        install_can_send_timeout(robot, config.can_send_timeout_s)
         while time.monotonic() < deadline:
             try:
-                firmware = robot.get_firmware(timeout=0.3, min_interval=0.0)
+                firmware = robot.get_firmware(timeout=0.3, min_interval=1.0)
+            except Exception as exc:
+                last_error = exc
+                _raise_for_can_fault(config)
+            else:
                 if firmware:
                     software = str(firmware.get("software_version", "")).strip()
                     selected = _firmware_name(software)
-                    logger.info("detected Nero firmware=%s driver=%s", software, selected)
+                    logger.info("detected Nero arm_firmware=%s driver=%s", software, selected)
                     return selected
-                robot.enable()
-            except Exception as exc:
-                last_error = exc
+            _raise_for_can_fault(config)
+            now = time.monotonic()
+            if now >= next_enable_at:
+                try:
+                    robot.enable()
+                except Exception as exc:
+                    last_error = exc
+                next_enable_at = now + 1.0
+                _raise_for_can_fault(config)
             time.sleep(0.05)
     finally:
         robot.disconnect()
@@ -127,43 +184,22 @@ def install_can_frame_interval(robot, interval_s: float) -> None:
                 time.sleep(interval_s)
     robot._send_msgs = MethodType(delayed_send_msgs, robot)
 
-def read_motor_feedback_optional(robot) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
-    try:
-        packets = [robot.get_motor_states(joint) for joint in range(1, 8)]
-    except Exception:
-        return None
-    if any(packet is None or packet.msg is None for packet in packets):
-        return None
-    q = np.asarray([packet.msg.position for packet in packets], dtype=float)
-    timestamps = np.asarray([getattr(packet, "timestamp", 0.0) for packet in packets], dtype=float)
-    hz = np.asarray([getattr(packet, "hz", 0.0) for packet in packets], dtype=float)
-    if not all(np.all(np.isfinite(values)) for values in (q, timestamps, hz)):
-        return None
-    return q, timestamps, hz
-
-def read_motor_feedback(robot, timeout_s: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def read_joint_feedback(robot, timeout_s: float) -> JointFeedbackSample:
     deadline = time.monotonic() + timeout_s
-    previous = None
     while time.monotonic() < deadline:
-        feedback = read_motor_feedback_optional(robot)
+        feedback = read_feedback_sample(robot)
         if feedback is not None:
-            q, timestamps, hz = feedback
-            live = hz > 0.0
-            if previous is not None:
-                live |= timestamps != previous
-            if np.all(live):
-                return q, timestamps, hz
-            previous = timestamps
+            return feedback
         time.sleep(0.02)
-    raise RuntimeError("timed out waiting for live motor feedback")
+    raise RuntimeError("timed out waiting for joint-angle and motor-state feedback")
 
 def read_current_joint_angles(robot, timeout_s: float) -> np.ndarray:
-    return read_motor_feedback(robot, timeout_s)[0]
+    return read_joint_feedback(robot, timeout_s)[0]
 
 def wait_for_feedback(robot, timeout_s: float) -> bool:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        if read_motor_feedback_optional(robot) is not None or robot.get_arm_status() is not None:
+        if read_feedback_sample(robot) is not None or robot.get_arm_status() is not None:
             return True
         time.sleep(0.02)
     return False
@@ -186,6 +222,7 @@ def enable_normal_push(robot, timeout_s: float, firmware: str) -> None:
     raise RuntimeError(f"timed out enabling Nero with firmware driver {firmware}") from last_error
 
 def connect_robot(config: RealArmConfig, logger: logging.Logger):
+    _log_sdk_identity(config, logger)
     ensure_socketcan_ready(config)
     firmware = detect_firmware(config, logger) if config.firmware == "auto" else config.firmware
     if firmware not in _FIRMWARE_NAMES:
@@ -229,15 +266,18 @@ class RealArmBackend:
         self.config = real_config
         self.motion_config = motion_config
         self.logger = logger
+        self.feedback_lock = threading.Lock()
         self.robot, self.firmware = robot_factory(real_config, logger) if robot_factory else self._connect_robot()
         try:
-            self.q_feedback, self.motor_timestamps, _ = read_motor_feedback(
-                self.robot, real_config.startup_timeout_s
-            )
+            feedback = read_joint_feedback(self.robot, real_config.startup_timeout_s)
         except Exception:
             self.robot.disconnect()
             raise
-        self.motor_updated_at = np.full(7, time.monotonic())
+        self.q_feedback, self.joint_timestamp, _, self.motor_timestamps = feedback
+        self.latest_feedback_sample = feedback
+        now = time.monotonic()
+        self.joint_updated_at = now
+        self.motor_updated_at = np.full(7, now)
         self.feedback_warning = False
         self.last_sent_q = self.q_feedback.copy()
         self.js_active = False
@@ -268,7 +308,7 @@ class RealArmBackend:
             self.robot.move_j([float(v) for v in q_cmd])
             self.last_sent_q = q_cmd.copy()
             time.sleep(dt)
-        self._latest_motor_feedback()
+        self._latest_feedback()
     def prepare_teleop(self, side: str) -> np.ndarray:
         if side != self.side:
             raise ValueError(f"{side} arm is not connected")
@@ -293,41 +333,46 @@ class RealArmBackend:
         if side != self.side:
             raise ValueError(f"{side} arm is not connected")
         if wait:
-            self._latest_motor_feedback()
-        return self.q_feedback.copy()
-    def _latest_motor_feedback(self) -> np.ndarray:
-        feedback = read_motor_feedback_optional(self.robot)
-        if feedback is None:
-            self._warn_feedback("missing or invalid motor packet")
+            self._latest_feedback()
+        with self.feedback_lock:
             return self.q_feedback.copy()
-        q, self.motor_timestamps, _ = feedback
-        self.motor_updated_at[:] = time.monotonic()
-        self.q_feedback = q
-        self.feedback_warning = False
-        return q.copy()
+    def _latest_feedback(self) -> np.ndarray:
+        self.refresh_feedback()
+        return self.current_joints(self.side)
+    def feedback_sample(self) -> JointFeedbackSample:
+        with self.feedback_lock:
+            joint_q, joint_timestamp, motor_q, motor_timestamps = self.latest_feedback_sample
+            return joint_q.copy(), joint_timestamp, motor_q.copy(), motor_timestamps.copy()
     def refresh_feedback(self) -> bool:
-        feedback = read_motor_feedback_optional(self.robot)
+        feedback = read_feedback_sample(self.robot)
         if feedback is None:
-            self._warn_feedback("missing or invalid motor packet")
+            self._warn_feedback("missing or invalid joint-angle or motor-state packet")
             return False
-        q, timestamps, hz = feedback
-        now = time.monotonic()
-        self.motor_updated_at[(timestamps != self.motor_timestamps) | (hz > 0.0)] = now
-        self.motor_timestamps = timestamps
-        if np.any(now - self.motor_updated_at > self.config.feedback_stale_s):
-            self._warn_feedback("motor packet stream is stale")
-            return False
-        if self.feedback_warning:
-            self.logger.info("motor feedback recovered side=%s", self.side)
-        self.feedback_warning = False
-        self.q_feedback = q
-        return True
+        with self.feedback_lock:
+            joint_q, joint_timestamp, _, motor_timestamps = feedback
+            now = time.monotonic()
+            if joint_timestamp != self.joint_timestamp:
+                self.joint_updated_at = now
+            self.motor_updated_at[motor_timestamps != self.motor_timestamps] = now
+            self.joint_timestamp = joint_timestamp
+            self.motor_timestamps = motor_timestamps
+            self.latest_feedback_sample = feedback
+            if (
+                now - self.joint_updated_at > self.config.feedback_stale_s
+                or np.any(now - self.motor_updated_at > self.config.feedback_stale_s)
+            ):
+                self._warn_feedback("joint-angle or motor-state packet stream is stale")
+                return False
+            if self.feedback_warning:
+                self.logger.info("joint feedback recovered side=%s", self.side)
+            self.feedback_warning = False
+            self.q_feedback = joint_q
+            return True
     def _warn_feedback(self, reason: str) -> None:
         if not self.feedback_warning:
-            self.logger.warning("motor feedback unavailable side=%s: %s; continuing", self.side, reason)
+            self.logger.warning("joint feedback unavailable side=%s: %s; continuing", self.side, reason)
             self.feedback_warning = True
     def update(self, left_q: np.ndarray | None, right_q: np.ndarray | None, frames: CoordinateFrames, status: str, dt: float) -> None:
-        self.refresh_feedback()
         q = left_q if self.side == "left" else right_q
         if q is None:
             if not self.js_active:

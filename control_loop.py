@@ -12,6 +12,7 @@ from motion import ArmMotionPlanner
 from pose_io import PoseInputSubscriber
 from run_log import SessionLogger
 from sim import SwiftSimBackend
+from telemetry import TelemetryPublisher
 def _real_side(mode: str) -> str | None:
     if mode == "left_real":
         return "left"
@@ -70,6 +71,7 @@ def _record_side(
 def run_control(config: ControlConfig, logger: logging.Logger, session: SessionLogger) -> int:
     pose_input = PoseInputSubscriber(config.pose_input)
     backend = None
+    telemetry = None
     try:
         left_ik = NeroIK(config.ik)
         right_ik = NeroIK(config.ik)
@@ -113,9 +115,27 @@ def run_control(config: ControlConfig, logger: logging.Logger, session: SessionL
         left_motion = ArmMotionPlanner(config.motion, left_start)
         right_motion = ArmMotionPlanner(config.motion, right_start)
         dt = 1.0 / config.motion.command_hz
+        telemetry_ik = NeroIK(config.ik) if real_side is not None else None
+        current_pose = None
+        if real_side == "left":
+            current_pose = lambda q: _flange_in_horizon(telemetry_ik, bases.left, q)
+        elif real_side == "right":
+            current_pose = lambda q: _flange_in_horizon(telemetry_ik, bases.right, q)
+        telemetry = TelemetryPublisher(
+            pose_input,
+            logger,
+            config.telemetry.publish_hz,
+            config.telemetry.rate_window_s,
+            config.telemetry.warn_below_hz,
+            real_side=real_side,
+            backend=backend if real_side is not None else None,
+            current_pose=current_pose,
+        )
+        telemetry.start()
         last_status = ""
         while True:
             tick_start = time.monotonic()
+            telemetry.check()
             pose_input.spin()
             now = time.monotonic()
             left_raw = pose_input.get_left() if use_left else None
@@ -146,7 +166,7 @@ def run_control(config: ControlConfig, logger: logging.Logger, session: SessionL
             left_command_flange = _flange_in_horizon(left_ik, bases.left, left_q)
             right_current_flange = _flange_in_horizon(right_ik, bases.right, right_current_q)
             right_command_flange = _flange_in_horizon(right_ik, bases.right, right_q)
-            pose_input.publish_telemetry(
+            telemetry.update(
                 left_current_q, left_q, left_current_flange, left_command_flange,
                 right_current_q, right_q, right_current_flange, right_command_flange,
             )
@@ -170,6 +190,8 @@ def run_control(config: ControlConfig, logger: logging.Logger, session: SessionL
     except KeyboardInterrupt:
         pass
     finally:
+        if telemetry is not None:
+            telemetry.close()
         if backend is not None:
             backend.close()
         pose_input.close()

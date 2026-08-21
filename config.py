@@ -14,7 +14,7 @@ class PoseInputConfig:
 @dataclass(frozen=True)
 class FrameTransformConfig:
     translation_left_shoulder_to_left_arm_base_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
-    rotation_left_shoulder_to_left_arm_base_rpy_deg: tuple[float, float, float] = (0.0, -90.0, 0.0)
+    rotation_left_shoulder_to_left_arm_base_rpy_deg: tuple[float, float, float] = (-90.0, 0.0, 90.0)
     translation_right_shoulder_to_right_arm_base_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
     rotation_right_shoulder_to_right_arm_base_rpy_deg: tuple[float, float, float] = (0.0, -90.0, 180.0)
     translation_horizon_to_left_shoulder_m: tuple[float, float, float] = (-0.16, 0.0, 0.0)
@@ -59,7 +59,7 @@ class FilterConfig:
     ik_output: OneEuroConfig = field(default_factory=OneEuroConfig)
 @dataclass(frozen=True)
 class StartupConfig:
-    left_pose_rad: tuple[float, ...] = (1.328929, 1.421239, -0.917729, 1.662461, -0.391128, 0.455112, -0.159994)
+    left_pose_rad: tuple[float, ...] = (-0.241867326795, 1.421239, -0.917729, 1.662461, -0.391128, 0.455112, -0.159994)
     right_pose_rad: tuple[float, ...] = (1.328929, 1.421239, 2.223864, 1.662461, -0.391128, 0.455112, -0.159994)
     enable_startup_pose: bool = True
 @dataclass(frozen=True)
@@ -71,6 +71,11 @@ class MotionConfig:
     min_trajectory_duration_s: float = 0.2
     max_trajectory_duration_s: float = 4.0
     joint_limit_margin_rad: float = 0.035
+@dataclass(frozen=True)
+class TelemetryConfig:
+    publish_hz: float = 200.0
+    rate_window_s: float = 5.0
+    warn_below_hz: float = 180.0
 @dataclass(frozen=True)
 class SimConfig:
     visual_z_offset_m: float = 0.6
@@ -111,6 +116,7 @@ class ControlConfig:
     filters: FilterConfig = field(default_factory=FilterConfig)
     startup: StartupConfig = field(default_factory=StartupConfig)
     motion: MotionConfig = field(default_factory=MotionConfig)
+    telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
     sim: SimConfig = field(default_factory=SimConfig)
     real: RealArmConfig = field(default_factory=RealArmConfig)
     log: LogConfig = field(default_factory=LogConfig)

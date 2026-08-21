@@ -9,6 +9,7 @@ dependencies:
   - ros-jazzy-std-msgs
   - ros-jazzy-rmw-cyclonedds-cpp
   - numpy=1.26
+  - matplotlib>=3.8
   - scipy=1.13
   - cython>=3.0
   - setuptools>=83.0
