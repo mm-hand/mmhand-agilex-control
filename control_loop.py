@@ -8,7 +8,7 @@ from config import ControlConfig
 from filters import JointTargetFilter, PoseFilter, PoseInputLimiter
 from frames import arm_base_in_horizon, build_coordinate_frames
 from ik import NeroIK
-from motion import ArmMotionPlanner
+from motion import ArmMotionPlanner, following_error_speed_scale, max_abs_angle_diff
 from pose_io import PoseInputSubscriber
 from run_log import SessionLogger
 from sim import SwiftSimBackend
@@ -34,11 +34,16 @@ def _wait_for_enter(pose_input, backend, real_side: str | None, command_hz: floa
                 raise EOFError("stdin closed before teleop confirmation")
             print()
             return
-def _motion_step(planner: ArmMotionPlanner, target: np.ndarray | None, now: float) -> np.ndarray | None:
+def _motion_step(
+    planner: ArmMotionPlanner,
+    target: np.ndarray | None,
+    now: float,
+    speed_scale: float = 1.0,
+) -> np.ndarray | None:
     if target is None:
         planner.step(None, now)
         return None
-    return planner.step(target, now)
+    return planner.step(target, now, speed_scale)
 def _flange_in_horizon(ik: NeroIK, horizon_to_arm_base: np.ndarray, q: np.ndarray | None) -> np.ndarray | None:
     if q is None:
         return None
@@ -133,6 +138,8 @@ def run_control(config: ControlConfig, logger: logging.Logger, session: SessionL
         )
         telemetry.start()
         last_status = ""
+        following_limited_reported = False
+        next_following_warning_at = 0.0
         while True:
             tick_start = time.monotonic()
             telemetry.check()
@@ -147,8 +154,33 @@ def run_control(config: ControlConfig, logger: logging.Logger, session: SessionL
             right_target_raw = right_ik.solve(frames.right.transform_arm_base_to_flange) if use_right and frames.right else None
             left_target = left_target_filter.apply(left_target_raw, now) if use_left else None
             right_target = right_target_filter.apply(right_target_raw, now) if use_right else None
-            left_q = _motion_step(left_motion, left_target, now) if use_left else None
-            right_q = _motion_step(right_motion, right_target, now) if use_right else None
+            left_speed_scale = right_speed_scale = 1.0
+            if real_side is not None:
+                planner = left_motion if real_side == "left" else right_motion
+                measured_q = backend.current_joints(real_side)
+                following_error = max_abs_angle_diff(planner.q, measured_q)
+                speed_scale = following_error_speed_scale(following_error, config.motion)
+                if real_side == "left":
+                    left_speed_scale = speed_scale
+                else:
+                    right_speed_scale = speed_scale
+                if speed_scale == 1.0 and following_limited_reported:
+                    logger.info(
+                        "following-error governor recovered side=%s error=%.2fdeg speed=100%%",
+                        real_side, np.rad2deg(following_error),
+                    )
+                    following_limited_reported = False
+                    next_following_warning_at = now + 1.0
+                elif speed_scale < 1.0 and now >= next_following_warning_at:
+                    state = "stopped" if speed_scale == 0.0 else "slowing"
+                    logger.warning(
+                        "following-error governor side=%s state=%s error=%.2fdeg speed=%.0f%%",
+                        real_side, state, np.rad2deg(following_error), 100.0 * speed_scale,
+                    )
+                    following_limited_reported = True
+                    next_following_warning_at = now + 1.0
+            left_q = _motion_step(left_motion, left_target, now, left_speed_scale) if use_left else None
+            right_q = _motion_step(right_motion, right_target, now, right_speed_scale) if use_right else None
             connected = pose_input.connected(config.pose_input.disconnect_s)
             if not connected:
                 status = "pose input: disconnected (waiting...)"

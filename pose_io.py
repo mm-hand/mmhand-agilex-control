@@ -2,13 +2,29 @@ from __future__ import annotations
 import time
 import numpy as np
 import rclpy
+from builtin_interfaces.msg import Time
 from geometry_msgs.msg import PoseArray, PoseStamped
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.qos import qos_profile_sensor_data
-from std_msgs.msg import Float64MultiArray, UInt8MultiArray
+from sensor_msgs.msg import JointState
+from std_msgs.msg import UInt8MultiArray
 from config import PoseInputConfig
 from frames import ControllerPose
 from transforms import quat_xyzw_from_rotation_matrix
+
+JOINT_NAMES = [f"joint{joint}" for joint in range(1, 8)]
+
+
+def _stamp_from_seconds(seconds: float) -> Time:
+    if not np.isfinite(seconds) or seconds <= 0.0:
+        raise ValueError("SDK timestamp must be finite and positive")
+    sec = int(seconds)
+    nanosec = round((float(seconds) - sec) * 1_000_000_000)
+    if nanosec == 1_000_000_000:
+        sec, nanosec = sec + 1, 0
+    return Time(sec=sec, nanosec=nanosec)
+
+
 class PoseInputSubscriber:
     def __init__(self, config: PoseInputConfig) -> None:
         self.context = rclpy.Context()
@@ -27,12 +43,12 @@ class PoseInputSubscriber:
         self.node.create_subscription(
             UInt8MultiArray, config.tracked_topic, self._on_tracked, qos_profile_sensor_data
         )
-        self.left_current_joints = self.node.create_publisher(Float64MultiArray, "/analytic_control/left/current_joints", qos_profile_sensor_data)
-        self.left_target_joints = self.node.create_publisher(Float64MultiArray, "/analytic_control/left/target_joints", qos_profile_sensor_data)
+        self.left_current_joints = self.node.create_publisher(JointState, "/analytic_control/left/current_joints", qos_profile_sensor_data)
+        self.left_target_joints = self.node.create_publisher(JointState, "/analytic_control/left/target_joints", qos_profile_sensor_data)
         self.left_current_pose = self.node.create_publisher(PoseStamped, "/analytic_control/left/current_pose", qos_profile_sensor_data)
         self.left_target_pose = self.node.create_publisher(PoseStamped, "/analytic_control/left/target_pose", qos_profile_sensor_data)
-        self.right_current_joints = self.node.create_publisher(Float64MultiArray, "/analytic_control/right/current_joints", qos_profile_sensor_data)
-        self.right_target_joints = self.node.create_publisher(Float64MultiArray, "/analytic_control/right/target_joints", qos_profile_sensor_data)
+        self.right_current_joints = self.node.create_publisher(JointState, "/analytic_control/right/current_joints", qos_profile_sensor_data)
+        self.right_target_joints = self.node.create_publisher(JointState, "/analytic_control/right/target_joints", qos_profile_sensor_data)
         self.right_current_pose = self.node.create_publisher(PoseStamped, "/analytic_control/right/current_pose", qos_profile_sensor_data)
         self.right_target_pose = self.node.create_publisher(PoseStamped, "/analytic_control/right/target_pose", qos_profile_sensor_data)
     def _on_poses(self, msg: PoseArray) -> None:
@@ -76,22 +92,37 @@ class PoseInputSubscriber:
         right_target_q: np.ndarray | None,
         right_current_pose: np.ndarray | None,
         right_target_pose: np.ndarray | None,
+        *,
+        left_current_timestamp_s: float | None = None,
+        right_current_timestamp_s: float | None = None,
     ) -> None:
         if not self.context.ok():
             return
-        stamp = self.node.get_clock().now().to_msg()
-        self._publish_joints(self.left_current_joints, left_current_q)
-        self._publish_joints(self.left_target_joints, left_target_q)
-        self._publish_pose(self.left_current_pose, left_current_pose, stamp)
-        self._publish_pose(self.left_target_pose, left_target_pose, stamp)
-        self._publish_joints(self.right_current_joints, right_current_q)
-        self._publish_joints(self.right_target_joints, right_target_q)
-        self._publish_pose(self.right_current_pose, right_current_pose, stamp)
-        self._publish_pose(self.right_target_pose, right_target_pose, stamp)
-    def _publish_joints(self, publisher, q: np.ndarray | None) -> None:
+        target_stamp = self.node.get_clock().now().to_msg()
+        left_current_stamp = (
+            target_stamp if left_current_timestamp_s is None
+            else _stamp_from_seconds(left_current_timestamp_s)
+        )
+        right_current_stamp = (
+            target_stamp if right_current_timestamp_s is None
+            else _stamp_from_seconds(right_current_timestamp_s)
+        )
+        self._publish_joints(self.left_current_joints, left_current_q, left_current_stamp)
+        self._publish_joints(self.left_target_joints, left_target_q, target_stamp)
+        self._publish_pose(self.left_current_pose, left_current_pose, left_current_stamp)
+        self._publish_pose(self.left_target_pose, left_target_pose, target_stamp)
+        self._publish_joints(self.right_current_joints, right_current_q, right_current_stamp)
+        self._publish_joints(self.right_target_joints, right_target_q, target_stamp)
+        self._publish_pose(self.right_current_pose, right_current_pose, right_current_stamp)
+        self._publish_pose(self.right_target_pose, right_target_pose, target_stamp)
+    def _publish_joints(self, publisher, q: np.ndarray | None, stamp: Time) -> None:
         if q is None:
             return
-        publisher.publish(Float64MultiArray(data=[float(v) for v in np.asarray(q, dtype=float).reshape(7)]))
+        msg = JointState()
+        msg.header.stamp = stamp
+        msg.name = JOINT_NAMES
+        msg.position = [float(v) for v in np.asarray(q, dtype=float).reshape(7)]
+        publisher.publish(msg)
     def _publish_pose(self, publisher, transform: np.ndarray | None, stamp) -> None:
         if transform is None:
             return

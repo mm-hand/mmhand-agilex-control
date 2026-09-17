@@ -105,8 +105,10 @@ class TelemetryPublisher:
         joint_timestamp = sample[1]
         if fresh and joint_timestamp != self.last_published_joint_timestamp:
             current_q = self.backend.current_joints(self.real_side)
+            timestamp_arg = {f"{self.real_side}_current_timestamp_s": joint_timestamp}
             self.pose_input.publish_telemetry(
-                *self._snapshot(current_q, self.current_pose(current_q))
+                *self._snapshot(current_q, self.current_pose(current_q)),
+                **timestamp_arg,
             )
             self.last_published_joint_timestamp = joint_timestamp
             self.rate_window.mark_published(now)

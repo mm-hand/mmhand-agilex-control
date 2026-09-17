@@ -10,12 +10,13 @@ class FakePoseInput:
     def __init__(self) -> None:
         self.messages = []
 
-    def publish_telemetry(self, *values) -> None:
-        self.messages.append(values)
+    def publish_telemetry(self, *values, **timestamps) -> None:
+        self.messages.append((values, timestamps))
 
 
 class FakeBackend:
-    def __init__(self) -> None:
+    def __init__(self, side: str = "left") -> None:
+        self.side = side
         self.timestamp = 1.0
         self.q = np.arange(7, dtype=float)
 
@@ -27,7 +28,7 @@ class FakeBackend:
         return self.q.copy(), self.timestamp, self.q.copy(), timestamps
 
     def current_joints(self, side: str):
-        assert side == "left"
+        assert side == self.side
         return self.q.copy()
 
 
@@ -58,8 +59,10 @@ def test_real_telemetry_publishes_only_new_joint_timestamps():
     backend.timestamp += 0.005
     publisher._tick(0.004)
     assert len(pose_input.messages) == 2
-    assert np.array_equal(pose_input.messages[-1][0], backend.q)
-    assert pose_input.messages[-1][4] is None
+    values, timestamps = pose_input.messages[-1]
+    assert np.array_equal(values[0], backend.q)
+    assert values[4] is None
+    assert timestamps == {"left_current_timestamp_s": backend.timestamp}
 
 
 def test_sim_telemetry_republishes_latest_snapshot():
@@ -70,7 +73,29 @@ def test_sim_telemetry_republishes_latest_snapshot():
     publisher._tick(0.0)
     publisher._tick(0.005)
     assert len(pose_input.messages) == 2
-    assert all(value is not None for value in pose_input.messages[-1])
+    values, timestamps = pose_input.messages[-1]
+    assert all(value is not None for value in values)
+    assert timestamps == {}
+
+
+def test_real_telemetry_routes_right_sdk_timestamp():
+    pose_input = FakePoseInput()
+    backend = FakeBackend("right")
+    publisher = TelemetryPublisher(
+        pose_input,
+        _logger(),
+        200.0,
+        5.0,
+        180.0,
+        real_side="right",
+        backend=backend,
+        current_pose=lambda q: np.eye(4),
+    )
+    publisher._tick(0.0)
+    values, timestamps = pose_input.messages[0]
+    assert values[0] is None
+    assert np.array_equal(values[4], backend.q)
+    assert timestamps == {"right_current_timestamp_s": backend.timestamp}
 
 
 def test_feedback_rate_log_warns_below_threshold_and_otherwise_informs():

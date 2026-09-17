@@ -222,6 +222,11 @@ ros2 topic echo /analytic_control/left/current_joints --once
 In `dual_sim`, both sides publish telemetry. In real-arm mode, the active arm
 publishes non-empty current and target data.
 
+Joint telemetry uses `sensor_msgs/JointState`; pose telemetry uses
+`geometry_msgs/PoseStamped`. In real-arm mode, `current_*` headers carry the SDK
+feedback timestamp, while `target_*` headers carry the host ROS publish time. In
+simulation, all headers use the host ROS time.
+
 ## Run logs
 
 File logging is enabled by `LogConfig.enabled`. Each invocation creates one

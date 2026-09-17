@@ -1,5 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
+from math import radians
 @dataclass(frozen=True)
 class RuntimeConfig:
     # "dual_sim": simulate both arms; "left_real"/"right_real": teleoperate that real arm.
@@ -68,6 +69,8 @@ class MotionConfig:
     max_joint_step_rad: float = 0.02
     max_velocity_rad_s: tuple[float, ...] = (0.8, 0.8, 1.0, 1.0, 1.2, 1.2, 1.2)
     max_acceleration_rad_s2: tuple[float, ...] = (2.0, 2.0, 2.5, 2.5, 3.0, 3.0, 3.0)
+    following_error_slow_rad: float = radians(6.0)
+    following_error_stop_rad: float = radians(12.0)
     min_trajectory_duration_s: float = 0.2
     max_trajectory_duration_s: float = 4.0
     joint_limit_margin_rad: float = 0.035

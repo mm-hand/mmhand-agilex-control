@@ -9,11 +9,12 @@ from log_joint_feedback import _snapshot, _timestamp_hz
 
 
 class FakeRobot:
-    def __init__(self, missing_motor: bool = False) -> None:
+    def __init__(self, missing_motor: bool = False, timestamp: float = 10.0) -> None:
         self.missing_motor = missing_motor
+        self.timestamp = timestamp
 
     def get_joint_angles(self):
-        return SimpleNamespace(msg=np.arange(7, dtype=float), timestamp=10.0)
+        return SimpleNamespace(msg=np.arange(7, dtype=float), timestamp=self.timestamp)
 
     def get_motor_states(self, joint: int):
         if self.missing_motor and joint == 7:
@@ -39,6 +40,11 @@ def test_snapshot_maps_both_feedback_sources():
 
 def test_snapshot_rejects_incomplete_motor_feedback():
     assert _snapshot(FakeRobot(missing_motor=True)) is None
+
+
+def test_snapshot_rejects_invalid_sdk_timestamp():
+    assert _snapshot(FakeRobot(timestamp=0.0)) is None
+    assert _snapshot(FakeRobot(timestamp=np.nan)) is None
 
 
 def test_rate_window_counts_unique_sdk_timestamps():

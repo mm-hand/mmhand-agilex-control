@@ -25,9 +25,14 @@ def read_feedback_sample(robot) -> JointFeedbackSample | None:
     motor_q = np.asarray([packet.msg.position for packet in motor_packets], dtype=float)
     motor_timestamps = np.asarray([packet.timestamp for packet in motor_packets], dtype=float)
     joint_timestamp = float(joint_packet.timestamp)
-    if joint_q.shape != (7,) or not all(
-        np.all(np.isfinite(values))
-        for values in (joint_q, motor_q, motor_timestamps, [joint_timestamp])
+    if (
+        joint_q.shape != (7,)
+        or not all(
+            np.all(np.isfinite(values))
+            for values in (joint_q, motor_q, motor_timestamps, [joint_timestamp])
+        )
+        or joint_timestamp <= 0.0
+        or np.any(motor_timestamps <= 0.0)
     ):
         return None
     return joint_q, joint_timestamp, motor_q, motor_timestamps

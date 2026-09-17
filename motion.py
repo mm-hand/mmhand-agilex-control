@@ -7,6 +7,16 @@ def angle_diff(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return (a - b + np.pi) % (2.0 * np.pi) - np.pi
 def max_abs_angle_diff(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.max(np.abs(angle_diff(a, b))))
+def following_error_speed_scale(error_rad: float, config: MotionConfig) -> float:
+    slow = float(config.following_error_slow_rad)
+    stop = float(config.following_error_stop_rad)
+    if not 0.0 <= slow < stop:
+        raise ValueError("following-error thresholds must satisfy 0 <= slow < stop")
+    if not np.isfinite(error_rad) or error_rad < 0.0:
+        raise ValueError("following error must be finite and non-negative")
+    if error_rad <= slow:
+        return 1.0
+    return float(np.clip((stop - error_rad) / (stop - slow), 0.0, 1.0))
 def near_target(q: np.ndarray, target: np.ndarray) -> np.ndarray:
     return q - 2.0 * np.pi * np.round((q - target) / (2.0 * np.pi))
 def joint_limits_with_margin(config: MotionConfig) -> tuple[np.ndarray, np.ndarray]:
@@ -33,8 +43,14 @@ class ArmMotionPlanner:
         self.q = clip_to_joint_limits(np.asarray(q, dtype=float).reshape(7), self.config)
         self.qd[:] = 0.0
         self.last_t = None
-    def step(self, q_target: np.ndarray | None, now: float) -> np.ndarray:
+    def step(self, q_target: np.ndarray | None, now: float, speed_scale: float = 1.0) -> np.ndarray:
+        if not np.isfinite(speed_scale) or not 0.0 <= speed_scale <= 1.0:
+            raise ValueError("speed_scale must be finite and between 0 and 1")
         if q_target is None:
+            self.qd[:] = 0.0
+            self.last_t = now
+            return self.q.copy()
+        if speed_scale == 0.0:
             self.qd[:] = 0.0
             self.last_t = now
             return self.q.copy()
@@ -45,11 +61,12 @@ class ArmMotionPlanner:
         self.last_t = now
         target = clip_to_joint_limits(near_target(np.asarray(q_target, dtype=float).reshape(7), self.q), self.config)
         dq = angle_diff(target, self.q)
-        vmax = _as_limit(self.config.max_velocity_rad_s, "max_velocity_rad_s")
+        vmax = _as_limit(self.config.max_velocity_rad_s, "max_velocity_rad_s") * speed_scale
         amax = _as_limit(self.config.max_acceleration_rad_s2, "max_acceleration_rad_s2")
         qd_next = self.qd + np.clip(np.clip(dq / dt, -vmax, vmax) - self.qd, -amax * dt, amax * dt)
+        qd_next = np.clip(qd_next, -vmax, vmax)
         step = qd_next * dt
-        max_step = float(self.config.max_joint_step_rad)
+        max_step = float(self.config.max_joint_step_rad) * speed_scale
         if max_step > 0.0:
             step = np.clip(step, -max_step, max_step)
             qd_next = step / dt
