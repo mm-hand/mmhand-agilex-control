@@ -1,16 +1,53 @@
 from __future__ import annotations
+
 from dataclasses import dataclass, field
-@dataclass(frozen=True)
-class RuntimeConfig:
-    # "dual_sim": simulate both arms; "left_real"/"right_real": teleoperate that real arm.
-    mode: str = "left_real"
+
+
 @dataclass(frozen=True)
 class PoseInputConfig:
-    node_name: str = "analytic_control"
-    poses_topic: str = "/read_pose/poses"
-    tracked_topic: str = "/read_pose/tracked"
     max_pose_age_s: float = 0.25
     disconnect_s: float = 0.5
+
+
+@dataclass(frozen=True)
+class PicoConfig:
+    device_port: int = 29761
+    ingest_host: str = "127.0.0.1"
+    vr_port: int = 9100
+    ipc_host: str = "127.0.0.1"
+    ipc_port: int = 9101
+    package: str = "com.mmhand.pico_head_relative_pose"
+    adb_path: str = ""
+    adb_retry_s: float = 3.0
+    status_hz: float = 2.0
+
+
+@dataclass(frozen=True)
+class IpcConfig:
+    host: str = "127.0.0.1"
+    port: int = 9101
+    max_line_bytes: int = 65536
+    reconnect_min_s: float = 0.5
+    reconnect_max_s: float = 2.0
+
+
+@dataclass(frozen=True)
+class GuiConfig:
+    host: str = "127.0.0.1"
+    port: int = 8080
+    port_span: int = 50
+    show: bool = True
+    refresh_hz: float = 10.0
+    scene_hz: float = 10.0
+
+
+@dataclass(frozen=True)
+class RosOutputConfig:
+    enabled_default: bool = False
+    prefix: str = "/nero"
+    frame_id: str = "pose_input_horizon"
+
+
 @dataclass(frozen=True)
 class FrameTransformConfig:
     translation_left_shoulder_to_left_arm_base_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
@@ -23,9 +60,10 @@ class FrameTransformConfig:
     rotation_controller_to_flange_rpy_deg: tuple[float, float, float] = (0.0, -180.0, 90.0)
     human_size_m: float = 1.0
     robot_size_m: float = 1.45
+
+
 @dataclass(frozen=True)
 class IkConfig:
-    urdf_path: str = "nero_urdf/nero.urdf"
     n_psi: int = 181
     local_theta0_window: float = 0.7
     local_theta0_count: int = 50
@@ -40,12 +78,16 @@ class IkConfig:
     reach_min_ratio: float = 1.05
     enable_initial_global_search: bool = True
     enable_global_fallback: bool = False
+
+
 @dataclass(frozen=True)
 class OneEuroConfig:
     enabled: bool = True
     min_cutoff: float = 1.2
     beta: float = 0.03
     d_cutoff: float = 1.0
+
+
 @dataclass(frozen=True)
 class InputLimiterConfig:
     enabled: bool = True
@@ -53,15 +95,21 @@ class InputLimiterConfig:
     max_angular_speed_rad_s: float = 4.0
     max_position_step_m: float = 0.04
     max_rotation_step_rad: float = 0.16
+
+
 @dataclass(frozen=True)
 class FilterConfig:
     pose: OneEuroConfig = field(default_factory=OneEuroConfig)
     ik_output: OneEuroConfig = field(default_factory=OneEuroConfig)
+
+
 @dataclass(frozen=True)
 class StartupConfig:
     left_pose_rad: tuple[float, ...] = (-0.241867326795, 1.421239, -0.917729, 1.662461, -0.391128, 0.455112, -0.159994)
     right_pose_rad: tuple[float, ...] = (1.328929, 1.421239, 2.223864, 1.662461, -0.391128, 0.455112, -0.159994)
     enable_startup_pose: bool = True
+
+
 @dataclass(frozen=True)
 class MotionConfig:
     command_hz: float = 50.0
@@ -71,24 +119,14 @@ class MotionConfig:
     min_trajectory_duration_s: float = 0.2
     max_trajectory_duration_s: float = 4.0
     joint_limit_margin_rad: float = 0.035
-@dataclass(frozen=True)
-class TelemetryConfig:
-    publish_hz: float = 200.0
-    rate_window_s: float = 5.0
-    warn_below_hz: float = 180.0
-@dataclass(frozen=True)
-class SimConfig:
-    visual_z_offset_m: float = 0.6
-    show_horizon_frame: bool = True
-    horizon_frame_axis_length_m: float = 0.18
-    joint_log_period_s: float = 1.0
+
+
 @dataclass(frozen=True)
 class RealArmConfig:
     sdk_path: str = "third_party/pyAgxArm"
     interface: str = "socketcan"
     channel: str = "can0"
     bitrate: int = 1_000_000
-    # "auto", "default" (<=1.10), "v111", "v112", or "v120" (>=1.20).
     firmware: str = "auto"
     speed_percent: int = 20
     startup_timeout_s: float = 3.0
@@ -99,6 +137,8 @@ class RealArmConfig:
     feedback_stale_s: float = 0.25
     diagnostics_hz: float = 5.0
     sdk_joint_limits_enabled: bool = False
+
+
 @dataclass(frozen=True)
 class LogConfig:
     enabled: bool = True
@@ -106,17 +146,20 @@ class LogConfig:
     flush_period_s: float = 1.0
     max_bytes: int = 2_000_000
     backup_count: int = 3
+
+
 @dataclass(frozen=True)
 class ControlConfig:
-    runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     pose_input: PoseInputConfig = field(default_factory=PoseInputConfig)
+    pico: PicoConfig = field(default_factory=PicoConfig)
+    ipc: IpcConfig = field(default_factory=IpcConfig)
+    gui: GuiConfig = field(default_factory=GuiConfig)
+    ros_output: RosOutputConfig = field(default_factory=RosOutputConfig)
     frames: FrameTransformConfig = field(default_factory=FrameTransformConfig)
     ik: IkConfig = field(default_factory=IkConfig)
     input_limit: InputLimiterConfig = field(default_factory=InputLimiterConfig)
     filters: FilterConfig = field(default_factory=FilterConfig)
     startup: StartupConfig = field(default_factory=StartupConfig)
     motion: MotionConfig = field(default_factory=MotionConfig)
-    telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
-    sim: SimConfig = field(default_factory=SimConfig)
     real: RealArmConfig = field(default_factory=RealArmConfig)
     log: LogConfig = field(default_factory=LogConfig)

@@ -1,299 +1,180 @@
-# analytic_control
+# AgileX Nero Teleop
 
-Nero mechanical-arm analytic IK control for PICO pose teleoperation. It can
-run either dual-arm Swift simulation or teleoperate one real arm.
+PICO 4 Ultra controller teleoperation for AgileX Nero arms. The repository
+contains the headset receiver, the analytic IK controller, a NiceGUI console,
+and the PICO APK sources.
 
-## System prerequisites
-
-The supported baseline is Ubuntu 24.04 x86_64. Miniforge is the recommended
-Conda distribution; Mambaforge and Miniconda also work. Install the required
-Ubuntu tools:
-
-```bash
-sudo apt update
-sudo apt install -y git curl adb build-essential
-```
-
-`build-essential` provides the C/C++ toolchain used to compile `ik_solver.pyx`.
-The real-arm mode additionally requires a Linux SocketCAN-compatible adapter
-and driver that create `can0`. PICO teleoperation requires a PICO 4 Ultra with
-the supplied APK installed, USB debugging enabled, and ADB authorized. Swift
-simulation is viewed in a current desktop Chrome or Chromium browser.
-
-System ROS may remain installed, but do not source
-`/opt/ros/jazzy/setup.bash` in a terminal where `mmhand-ros` is active.
-
-## Install Conda
-
-Skip this section if `conda --version` already works. Otherwise install
-Miniforge in your user directory, initialize Bash, and verify it:
-
-```bash
-curl -L -O "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh"
-bash Miniforge3-$(uname)-$(uname -m).sh -b -p "$HOME/miniforge3"
-"$HOME/miniforge3/bin/conda" init bash
-source "$HOME/.bashrc"
-conda config --set auto_activate_base false
-conda --version
-```
-
-Expected result: `conda --version` prints a version number. New terminals can
-then use the `conda` command. The installer is provided by the
-[official Miniforge project](https://github.com/conda-forge/miniforge#unix-like-platforms-macos-linux--wsl).
-
-## Clone the workspace
-
-`analytic_control` and `read_pico` are sibling repositories:
+The application runs as two Python processes:
 
 ```text
-mm-hand/
-|- analytic_control/
-`- read_pico/
+python run.py
+|- parent process: NiceGUI + ArmController thread
+`- pico_bridge child process: ADB, PICO TCP receiver, IPC server
 ```
 
-Create the workspace and clone both repositories:
+The two processes talk over a local NDJSON TCP connection on `127.0.0.1:9101`.
+The GUI and the controller share an in-memory snapshot and command queue.
+
+## Requirements
+
+- Linux for real Nero arms (SocketCAN `can0`, `can1`, ...).
+- Windows or Linux for simulation, the GUI, and the PICO bridge.
+- Python 3.12 recommended.
+- PICO 4 Ultra with the supplied APK installed and USB debugging authorized.
+- `adb` available in `PATH` or configured through `PicoConfig.adb_path`.
+- Visual Studio Build Tools with the C++ workload on Windows, or a C compiler
+  on Linux, to build the Cython IK solver.
+
+## Install
+
+Linux with RoboStack Jazzy:
 
 ```bash
-mkdir -p ~/mm-hand
-cd ~/mm-hand
-git clone --recurse-submodules https://github.com/mm-hand/analytic_control.git
-git clone https://github.com/mm-hand/read_pico.git
-```
-
-## Create the ROS environment
-
-The dependency manifest is `environment.yml`. Create the shared RoboStack Jazzy
-environment once, then activate it:
-
-```bash
-cd ~/mm-hand/analytic_control
 conda env create -f environment.yml
 conda activate mmhand-ros
-conda env config vars list
+python scripts/build_ik.sh
 ```
 
-`environment.yml` sets `PYTHONNOUSERSITE=1` when the environment is activated,
-so no manual export is needed. After pulling dependency changes, update it with:
+Windows simulation environment:
 
-```bash
-conda env update -f environment.yml --prune
+```powershell
+conda env create -f environment-windows.yml
+conda activate nero-teleop
+powershell -ExecutionPolicy Bypass -File scripts/build_ik.ps1
 ```
 
-## Prepare and build IK
-
-The clone command initializes the real-arm SDK submodule. To repair an existing
-clone or update submodules, run:
+Real-arm use on Linux also requires the `pyAgxArm` submodule:
 
 ```bash
-cd ~/mm-hand/analytic_control
 git submodule update --init --recursive
 ```
 
-Build the Cython IK extension before the first run and after changing
-`ik_solver.pyx`:
+## Run
 
 ```bash
-cd ~/mm-hand/analytic_control
-conda activate mmhand-ros
-python setup.py build_ext --inplace
-```
-
-## Verify installation
-
-Run these checks after the IK build:
-
-```bash
-python -c "import rclpy; print('ROS Python OK')"
-python -c "import roboticstoolbox as rtb; print(rtb.__version__)"
-python -c "import ik_solver; print(ik_solver.__file__)"
-```
-
-Expected result: all three commands exit successfully. The second prints
-`1.3.0`; the third prints a compiled `ik_solver` shared-library path.
-
-Run the offline control regressions before connecting a real arm:
-
-```bash
-python test_ik.py
-python test_motion.py
-python test_hardware.py
-python test_logging.py
-```
-
-Expected result: every command ends with `All ... tests passed.`. The hardware
-test uses a fake SDK object; it does not open CAN or move an arm. These checks
-cover IK round trips and continuity, first-command acceleration/velocity/step
-limits, startup-to-servo holding, active-side routing, diagnostic rate limiting,
-and telemetry serialization.
-
-For real-arm work, verify the SocketCAN interface after configuring it:
-
-```bash
-ip -details link show can0
-```
-
-Expected result: `can0` exists, is `UP`, and reports `bitrate 1000000`.
-
-After starting `read_pico`, verify PICO ROS input:
-
-```bash
-ros2 topic list
-ros2 topic hz /read_pose/poses
-ros2 topic echo /read_pose/poses --once
-```
-
-Expected result: `/read_pose/poses` is listed, its rate is non-zero while PICO
-is running, and the echo prints a `geometry_msgs/PoseArray`. Stop `ros2 topic
-hz` with Ctrl-C after observing the rate.
-
-## Configure mode
-
-Edit `RuntimeConfig.mode` in `config.py`:
-
-```python
-mode: str = "dual_sim"    # Swift simulation for both arms
-mode: str = "left_real"   # left real-arm teleoperation (default)
-mode: str = "right_real"  # right real-arm teleoperation
-```
-
-`RealArmConfig.sdk_path` defaults to `third_party/pyAgxArm`. Its `firmware`
-setting defaults to `"auto"`; valid manual overrides are `"default"`,
-`"v111"`, `"v112"`, and `"v120"`. Use an override only when automatic
-detection cannot obtain the firmware version.
-
-## Run simulation
-
-Set `RuntimeConfig.mode` to `"dual_sim"`, then run:
-
-```bash
-cd ~/mm-hand/analytic_control
-conda activate mmhand-ros
 python run.py
 ```
 
-Expected result:
+The GUI opens automatically at `http://127.0.0.1:8080`, or on the next free
+port. The first tab is always `Arm Simulation`.
 
-- The terminal starts without an import error and logs `swift ready`.
-- Swift is available at `http://localhost:52000`.
-- Both Nero robot models appear in the browser.
-- PICO controller motion updates the controller/flange axes and arm poses.
-
-## Run real-arm teleoperation
-
-Start PICO pose publishing in one terminal:
-
-```bash
-cd ~/mm-hand/read_pico
-./run_ubuntu_ros.sh --vr-port 9100
-```
-
-Set `RuntimeConfig.mode` to `"left_real"` or `"right_real"`. In another
-terminal, configure CAN and start control:
-
-```bash
-cd ~/mm-hand/analytic_control
-conda activate mmhand-ros
-sudo ip link set can0 down
-sudo ip link set can0 type can bitrate 1000000
-sudo ip link set can0 up
-python read_joints.py
-python run.py
-```
-
-`read_joints.py` uses the same firmware detection and CAN connection path as
-real-arm teleoperation. It must print seven live joint angles before running
-`run.py`.
-
-The arm first moves to the configured startup pose through the joint motion
-limits. Press Enter only after that movement finishes. The backend then switches
-to joint-servo mode while repeatedly commanding the latest measured joint
-position for `servo_handoff_s`. IK continuity and the online motion planner are
-reset from that same feedback. The first PICO target therefore enters through
-the configured acceleration, velocity, and per-tick step limits. Missing or
-stale pose input holds the last joint command.
-
-After the control loop starts, verify telemetry:
-
-```bash
-ros2 topic list | grep /analytic_control
-ros2 topic echo /analytic_control/left/current_joints --once
-```
-
-In `dual_sim`, both sides publish telemetry. In real-arm mode, the active arm
-publishes non-empty current and target data.
-
-## Run logs
-
-File logging is enabled by `LogConfig.enabled`. Each invocation creates one
-directory under `logs/`:
+Useful options:
 
 ```text
-logs/<timestamp>_<mode>/
-|- control.log
-`- telemetry.csv
+--no-pico          Do not start the PICO bridge.
+--demo             Use synthetic controller motion; implies --no-pico.
+--headless         Run the controller without NiceGUI.
+--duration SEC     Headless run time.
+--port PORT        GUI port.
+--vr-port PORT     PICO TCP port on the PC.
+--ipc-port PORT    PICO bridge IPC port.
+--no-browser       Do not open a browser.
+--ros-output       Enable ROS 2 output at startup.
 ```
 
-`control.log` contains connection, input-state, handoff, warning, and final
-summary messages. `telemetry.csv` records startup and teleoperation phases for
-each active arm, including:
+## GUI
 
-- raw and filtered PICO pose;
-- calibrated target flange pose;
-- raw IK, filtered IK, actual, and commanded seven-joint vectors;
-- actual, IK, and commanded flange poses;
-- real-arm current, torque, voltage, temperature, enable/error state, and arm
-  status diagnostics.
+Top bar:
 
-Control values are sampled in the control loop. The heavier SDK diagnostics are
-rate-limited by `RealArmConfig.diagnostics_hz`, which defaults to 5 Hz. CSV
-data is flushed according to `LogConfig.flush_period_s`; the text log uses the
-configured rotation size and backup count. Ctrl-C closes both files and prints
-the final actual/commanded joints, PICO pose, and actual/IK flange poses. The
-generated `logs/` directory is ignored by Git.
+- `AgileX Nero Teleop`
+- `Connect Arms`
+- `ROS2 Output` switch
+- `STOP` on the right
 
-## IK overview
+Status bar: colored chips for system phase, PICO input, left/right controller
+tracking, left/right arm state, and ROS 2 output.
 
-### Target pose
+Tabs:
 
-`read_pico` provides controller poses in the horizon frame. The control loop
-maps each pose through the configured shoulder frame, scales its translation by
-`robot_size_m / human_size_m`, and applies the fixed controller-to-flange
-calibration. The result is the desired flange pose expressed in the arm base.
+- `Arm Simulation` (default): full-width 3D view of both arms. Blue is left,
+  orange is right, semi-transparent green is real-arm feedback.
+- `Controllers`: live position, quaternion, yaw/pitch/roll, and button states
+  for both PICO controllers.
 
-### Analytic 7-DoF solve
+The bottom `System Log` panel is resizable. Drag the divider to change its
+height. It shows control, PICO bridge, and GUI events.
 
-Nero has one redundant degree of freedom for a fixed flange pose. The solver
-uses the arm angle `theta0` to describe where the elbow lies around the
-shoulder-to-wrist line. For each sampled `theta0`, it uses the NERO modified-DH
-geometry to compute the shoulder, wrist, and elbow locations, solves joints
-one through four geometrically, then extracts joints five through seven from
-the remaining wrist transform. This is a geometric analytic solve with an
-arm-angle search, not a numerical pose optimizer.
+## Connect arms
 
-Each arm-angle sample can produce shoulder, elbow, and wrist branches. A
-candidate is discarded when any of its seven joints exceeds the configured
-joint limits. Before solving, the target reach is clamped to the configured
-workspace range so unreachable controller poses do not request an impossible
-arm extension.
+`Connect Arms` opens independent left and right rows. Each row has its own CAN
+channel and `Connect` / `Disconnect` button. Connect what you need:
 
-### Continuous teleoperation
+- No arm connected: pure simulation.
+- Left only: left commands go to the real left arm; the right side stays
+  simulated.
+- Right only: right commands go to the real right arm; the left side stays
+  simulated.
+- Both: both sides are real; both receive the same teleoperation targets.
 
-The first valid target uses a global arm-angle scan to acquire a feasible
-branch. Later targets search only near the previous `theta0`; global fallback
-is disabled by the default runtime configuration. Candidates are scored by joint
-change from the previous two commands, forward-kinematics pose error, arm-angle
-change, and proximity to joint limits. The previous branch is kept unless
-another branch improves the score enough and can be reached without a large
-joint jump.
+Left and right must use different CAN channels.
 
-Near a wrist singularity, the wrist decomposition keeps an approximate
-candidate instead of dropping the pose outright; the pose-error score then
-selects the best available result. The analytic IK output is subsequently
-smoothed by the OneEuro joint filter and constrained by the online joint-space
-motion limiter. Those filters and limits are teleoperation safety layers, not
-part of the geometric IK solve.
+When real arms are connected, the simulation first moves to the configured
+startup pose. A `Real Arm Handoff` dialog then asks you to verify that the
+simulated arm bases match the real arm bases. `Confirm and Move` is disabled
+until the verification checkbox is selected. Confirming moves every connected
+real arm to the startup pose and enters servo teleoperation. `Cancel` does not
+send motion and disconnects the real arms.
+
+If a new arm is connected during teleoperation, the simulation returns to the
+startup pose, the already-following arms hold, and the handoff dialog is shown
+again for all connected arms.
+
+`STOP` is a latched emergency stop. It stops new targets, keeps all connected
+arms at their current joint positions, and disables further control. Restart
+the process to resume.
+
+## ROS 2 output
+
+The GUI switch is off by default. When enabled, the PICO bridge publishes the
+input topics and the controller publishes the arm topics. ROS 2 is imported
+lazily, so a missing ROS 2 installation does not prevent simulation.
+
+PICO input:
 
 ```text
-PICO pose -> calibrated flange target -> analytic IK candidates
--> continuity and limit selection -> filtering and motion limiting
+/read_pose/poses      geometry_msgs/PoseArray
+/read_pose/buttons    std_msgs/UInt32MultiArray
+/read_pose/tracked    std_msgs/UInt8MultiArray
 ```
+
+Nero arms:
+
+```text
+/nero/left/current_joint_angles_deg       std_msgs/Float64MultiArray
+/nero/left/target_joint_angles_deg        std_msgs/Float64MultiArray
+/nero/left/current_end_effector_pose      geometry_msgs/PoseStamped
+/nero/left/target_end_effector_pose       geometry_msgs/PoseStamped
+```
+
+The same four topics exist under `/nero/right/`. Joint values are in degrees.
+End-effector poses use `pose_input_horizon` and are the flange pose computed by
+the analytic forward kinematics.
+
+## Logs
+
+Each run creates `logs/<timestamp>_teleop/` with `control.log` and
+`telemetry.csv`. The in-memory `System Log` shows the latest control and PICO
+bridge events; file logging stays available for longer sessions.
+
+## Tests
+
+```bash
+pytest -q
+```
+
+The suite covers IK, motion limits, hardware behavior, IPC, PICO bridge helpers,
+the multi-arm controller state machine, ROS topic payloads, the 3D joint chain,
+and the English GUI shell. No real arm is required.
+
+## Troubleshooting
+
+- `ik_solver` import fails: run `scripts/build_ik.ps1` or
+  `scripts/build_ik.sh`.
+- PICO not found: check `adb devices`, USB debugging, and the APK package.
+  The bridge retries ADB automatically.
+- Real arm connection requires Linux SocketCAN. Check `ip -details link show can0`
+  and the bitrate.
+- Port already in use: `run.py` chooses the next free port; pass `--port`,
+  `--vr-port`, or `--ipc-port` explicitly if needed.
+- ROS 2 output says `UNAVAILABLE`: activate an environment with `rclpy` and
+  `geometry_msgs`, then toggle it again.

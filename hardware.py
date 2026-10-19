@@ -295,7 +295,7 @@ class RealArmBackend:
             self.robot.set_motion_mode("js")
         if hasattr(self.robot, "set_auto_set_motion_mode_enabled"):
             self.robot.set_auto_set_motion_mode_enabled(False)
-    def move_j_startup(self, side: str, q: np.ndarray) -> None:
+    def move_j_startup(self, side: str, q: np.ndarray, stop_event=None) -> bool:
         if side != self.side:
             raise ValueError(f"{side} arm is not connected")
         target = validate_joint_command(q)
@@ -305,11 +305,16 @@ class RealArmBackend:
             self.robot.set_motion_mode("j")
         dt = 1.0 / self.motion_config.command_hz
         for q_cmd in joint_trajectory(self.motion_config, self.q_feedback, target):
+            if stop_event is not None and stop_event.is_set():
+                self.logger.warning("startup move aborted side=%s", self.side)
+                return False
             self.robot.move_j([float(v) for v in q_cmd])
             self.last_sent_q = q_cmd.copy()
             time.sleep(dt)
         self._latest_feedback()
-    def prepare_teleop(self, side: str) -> np.ndarray:
+        return True
+
+    def prepare_teleop(self, side: str, stop_event=None) -> np.ndarray | None:
         if side != self.side:
             raise ValueError(f"{side} arm is not connected")
         fresh = self.refresh_feedback()
@@ -318,6 +323,9 @@ class RealArmBackend:
         dt = 1.0 / self.motion_config.command_hz
         cycles = max(1, int(np.ceil(self.config.servo_handoff_s / dt)))
         for _ in range(cycles):
+            if stop_event is not None and stop_event.is_set():
+                self.logger.warning("servo handoff aborted side=%s", self.side)
+                return None
             self.robot.move_js([float(v) for v in hold_q])
             self.last_sent_q = hold_q.copy()
             time.sleep(dt)
@@ -329,6 +337,7 @@ class RealArmBackend:
             np.array2string(hold_q, precision=6),
         )
         return hold_q
+
     def current_joints(self, side: str, wait: bool = False) -> np.ndarray:
         if side != self.side:
             raise ValueError(f"{side} arm is not connected")

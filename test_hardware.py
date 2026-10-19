@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -340,6 +341,21 @@ def test_stale_motor_feedback_keeps_last_valid_angles():
     assert np.allclose(robot.sent_js[-1], 0.2)
 
 
+def test_startup_move_aborts_when_stopped():
+    backend, robot = _backend("left")
+    event = threading.Event()
+    event.set()
+    assert backend.move_j_startup("left", np.full(7, 0.001), event) is False
+    assert not robot.sent_j
+
+
+def test_servo_handoff_aborts_when_stopped():
+    backend, _robot = _backend("left")
+    event = threading.Event()
+    event.set()
+    assert backend.prepare_teleop("left", event) is None
+
+
 if __name__ == "__main__":
     test_validate_joint_command_rejects_nan()
     test_real_backend_sends_only_active_side()
@@ -352,4 +368,6 @@ if __name__ == "__main__":
     test_diagnostics_are_rate_limited()
     test_current_feedback_uses_get_joint_angles()
     test_stale_motor_feedback_keeps_last_valid_angles()
+    test_startup_move_aborts_when_stopped()
+    test_servo_handoff_aborts_when_stopped()
     print("All hardware tests passed.")

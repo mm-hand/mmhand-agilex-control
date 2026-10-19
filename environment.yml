@@ -8,19 +8,15 @@ dependencies:
   - ros-jazzy-geometry-msgs
   - ros-jazzy-std-msgs
   - ros-jazzy-rmw-cyclonedds-cpp
-  - numpy=1.26
-  - matplotlib>=3.8
-  - scipy=1.13
+  - numpy>=1.26
+  - nicegui=3.16.0
   - cython>=3.0
   - setuptools>=83.0
   - wheel>=0.47.0
-  - websockets=10.4
   - python-can>=3.3.4
   - pyusb
   - gs-usb>=0.3.1
-  - roboticstoolbox-python=1.3.0
-  - spatialmath-python=1.1.16
-  - spatialgeometry=1.1.0
-  - swift-sim=1.1.0
+  - pytest
+  - pytest-asyncio
 variables:
   PYTHONNOUSERSITE: "1"
