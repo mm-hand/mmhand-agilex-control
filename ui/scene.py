@@ -16,9 +16,9 @@ URDF_PATH = ROOT / "nero_urdf" / "nero.urdf"
 MESH_DIR = ROOT / "nero_urdf" / "meshes"
 SCENE_FROM_HORIZON = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]])
 SKIP_JOINTS = {"revo2_flange_joint"}
-CAMERA_FOV = 50
-CAMERA_POSITION = (1.2, -1.7, 1.35)
-CAMERA_LOOK_AT = (0.0, 0.0, 0.60)
+CAMERA_FOV = 33
+CAMERA_POSITION = (0.75, -1.05, 0.95)
+CAMERA_LOOK_AT = (0.165, 0.0, 0.21)
 HEAD_AXES_LENGTH = 0.22
 
 _EYE = np.eye(4, dtype=float)

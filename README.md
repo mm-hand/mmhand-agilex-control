@@ -189,6 +189,8 @@ Tabs:
 
 The bottom `System Log` is resizable. Drag the divider to change its height.
 
+![Arm Simulation](docs/simulation.png)
+
 ## Settings
 
 `Settings` edits a runtime override file:
