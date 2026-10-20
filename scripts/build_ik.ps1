@@ -9,25 +9,44 @@ if (-not (Test-Path $vcvars)) {
 }
 
 Write-Host "CONDA_PREFIX=$env:CONDA_PREFIX"
-if ($env:CONDA_PREFIX) {
-    $python = Join-Path $env:CONDA_PREFIX "python.exe"
-} else {
-    $python = (Get-Command python -ErrorAction Stop).Source
-}
-if (-not (Test-Path $python)) {
-    throw "Python executable not found: $python. Activate the existing conda environment first."
-}
-Write-Host "Using Python: $python"
+Write-Host "CONDA_DEFAULT_ENV=$env:CONDA_DEFAULT_ENV"
 
-$ErrorActionPreference = "Continue"
-$cython_output = & $python -c "import Cython; print(Cython.__version__)" 2>&1
-$cython_exit = $LASTEXITCODE
-$ErrorActionPreference = "Stop"
-if ($cython_exit -ne 0) {
-    $cython_output | ForEach-Object { Write-Host $_ }
-    throw "Cython is not installed in $python. Activate the environment and run: pip install -r requirements.txt"
+$candidates = @()
+if ($env:CONDA_PREFIX) {
+    if ($env:CONDA_DEFAULT_ENV -and $env:CONDA_DEFAULT_ENV -ne "base") {
+        $candidates += Join-Path $env:CONDA_PREFIX "envs\$($env:CONDA_DEFAULT_ENV)\python.exe"
+    }
+    $candidates += Join-Path $env:CONDA_PREFIX "python.exe"
 }
-Write-Host "Cython $cython_output"
+$path_python = Get-Command python -ErrorAction SilentlyContinue
+if ($path_python) {
+    $candidates += $path_python.Source
+}
+$candidates = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
+if (-not $candidates) {
+    throw "No Python executable found. Activate the existing conda environment first."
+}
+
+$python = $null
+foreach ($candidate in $candidates) {
+    $ErrorActionPreference = "Continue"
+    $output = & $candidate -c "import sys, Cython; print(sys.executable); print(Cython.__version__)" 2>&1
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+    if ($code -eq 0) {
+        $python = $candidate
+        Write-Host "Using Python: $python"
+        Write-Host "Cython $($output | Select-Object -Last 1)"
+        break
+    }
+    Write-Host "Skipping $candidate (Cython not available)"
+}
+
+if (-not $python) {
+    Write-Host "Checked:"
+    $candidates | ForEach-Object { Write-Host "  $_" }
+    throw "No Python with Cython found. Activate the existing conda environment and run: pip install -r requirements.txt"
+}
 
 Push-Location $root
 try {

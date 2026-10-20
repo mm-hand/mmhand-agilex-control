@@ -88,21 +88,59 @@ environment. It does not create an environment.
 
 ### Build the IK extension
 
-Activate the existing environment before running either build script. The
-scripts use the active environment's Python executable
-(`$CONDA_PREFIX/python.exe` on Windows and `$CONDA_PREFIX/bin/python` on Linux).
+The IK solver is the only compiled part of the project. Cython generates C from
+`ik_solver.pyx`, then the platform compiler builds a native extension. There is
+no separate build system to learn.
 
 Linux:
 
 ```bash
+conda activate mmhand
 python scripts/build_ik.sh
 ```
 
 Windows:
 
 ```powershell
+conda activate mmhand
 powershell -ExecutionPolicy Bypass -File scripts/build_ik.ps1
 ```
+
+The scripts are convenience wrappers. They locate the active environment's
+Python and the Visual Studio C++ environment, then run the same command you can
+run yourself.
+
+Manual build on Linux:
+
+```bash
+conda activate mmhand
+python setup.py build_ext --inplace
+```
+
+Manual build on Windows: open an **x64 Native Tools Command Prompt for VS 2022**
+so `cl.exe` is on `PATH`, then run:
+
+```bat
+conda activate mmhand
+cd C:\Users\73547\analytic_control
+python setup.py build_ext --inplace
+```
+
+Expected build artifacts:
+
+```text
+ik_solver.c
+ik_solver.cp312-win_amd64.pyd   # Windows
+ik_solver.cpython-312-*.so      # Linux
+```
+
+The generated files are ignored by Git. Rebuild after changing `ik_solver.pyx`.
+
+If the script cannot find Cython, it prints `CONDA_PREFIX`,
+`CONDA_DEFAULT_ENV`, and the Python candidates it checked. In some Windows
+PowerShell setups `CONDA_PREFIX` points to the base installation even though the
+prompt says `(mmhand)`; the script also checks the `CONDA_DEFAULT_ENV` candidate,
+so it can still find the right environment.
 
 For real-arm use on Linux, initialize the SDK submodule:
 
@@ -379,7 +417,7 @@ analytic_control/
 │   └── test_ui.py                      129
 │
 ├── scripts/
-│   ├── build_ik.ps1                     41
+│   ├── build_ik.ps1                     60
 │   └── build_ik.sh                      16
 │
 ├── requirements.txt
@@ -395,9 +433,9 @@ Source code totals, excluding this README, requirements, and pytest.ini:
 | PICO bridge | 4 | 341 |
 | NiceGUI | 4 | 629 |
 | Tests | 9 | 1,003 |
-| Build scripts and setup | 3 | 78 |
+| Build scripts and setup | 3 | 97 |
 | Hardware debug tool | 1 | 21 |
-| **Total** | **37** | **5,063** |
+| **Total** | **37** | **5,082** |
 
 `nero_urdf/meshes/*.stl` are runtime assets, not code. `apk/`, `build/`,
 generated `.pyd`/`.c` files, and `logs/` are excluded from the code count.
