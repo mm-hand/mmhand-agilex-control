@@ -16,6 +16,10 @@ URDF_PATH = ROOT / "nero_urdf" / "nero.urdf"
 MESH_DIR = ROOT / "nero_urdf" / "meshes"
 SCENE_FROM_HORIZON = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]])
 SKIP_JOINTS = {"revo2_flange_joint"}
+CAMERA_FOV = 50
+CAMERA_POSITION = (1.2, -1.7, 1.35)
+CAMERA_LOOK_AT = (0.0, 0.0, 0.60)
+HEAD_AXES_LENGTH = 0.22
 
 _EYE = np.eye(4, dtype=float)
 _EYE[:3, :3] = SCENE_FROM_HORIZON
@@ -236,6 +240,8 @@ class TeleopScene:
         self.left_ghost = None
         self.right_ghost = None
         self.bases = bases
+        self.head_axes = scene.axes_helper(HEAD_AXES_LENGTH)
+        self.head_axes.rotate_R(SCENE_FROM_HORIZON.tolist())
 
     def update(self, snapshot) -> None:
         with self.scene._batch_calls():
@@ -266,20 +272,26 @@ def build_scene(config: ControlConfig):
     from nicegui import ui
 
     with ui.element("div").classes("sim-viewport w-full h-full"):
-        scene = ui.scene(grid=False, background_color="#f8fafc", fps=10).classes("w-full h-full")
+        scene = ui.scene(
+            grid=False,
+            camera=ui.scene.perspective_camera(fov=CAMERA_FOV),
+            background_color="#f8fafc",
+            fps=10,
+        ).classes("w-full h-full")
         scene.move_camera(
-            x=1.7,
-            y=-2.3,
-            z=1.8,
-            look_at_x=0.0,
-            look_at_y=0.0,
-            look_at_z=0.65,
+            x=CAMERA_POSITION[0],
+            y=CAMERA_POSITION[1],
+            z=CAMERA_POSITION[2],
+            look_at_x=CAMERA_LOOK_AT[0],
+            look_at_y=CAMERA_LOOK_AT[1],
+            look_at_z=CAMERA_LOOK_AT[2],
             duration=0.0,
         )
         with ui.element("div").classes("scene-legend"):
             ui.label("Left Arm").classes("legend-left")
             ui.label("Right Arm").classes("legend-right")
             ui.label("Real Feedback").classes("legend-real")
+            ui.label("Head / Horizon").classes("legend-frame")
     visual = TeleopScene(scene, config)
 
     def refresh(snapshot) -> None:

@@ -37,6 +37,7 @@ body {background:#F5F7FA;color:#1e293b}
 .legend-left {color:#2563eb;font-weight:600}
 .legend-right {color:#f97316;font-weight:600}
 .legend-real {color:#16a34a;font-weight:600}
+.legend-frame {color:#475569;font-weight:600}
 .system-log {height:100%;min-height:0;background:white;padding:6px 12px;gap:4px;overflow:hidden}
 .system-log .nicegui-log {flex:1;min-height:0;width:100%;font:11px ui-monospace,monospace;color:#475569}
 .q-card {border-radius:10px;box-shadow:0 1px 4px #182b4410;padding:12px;gap:8px}

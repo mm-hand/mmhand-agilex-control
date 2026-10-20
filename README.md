@@ -352,6 +352,10 @@ Each joint is represented by a fixed origin group and a rotating group. Only
 the seven joint rotations are updated during teleoperation. The STL meshes are
 served by NiceGUI at `/nero_meshes/*.stl`.
 
+The scene also shows the `pose_input_horizon` frame as RGB axes at the scene
+origin. Red is horizon +X, green is horizon +Y, and blue is horizon +Z. The
+camera is positioned close to the arms so both arms fill the viewport.
+
 The left arm is blue, the right arm is orange, and real-arm feedback is drawn as
 a semi-transparent green ghost.
 
@@ -406,9 +410,9 @@ analytic_control/
 │
 ├── ui/
 │   ├── __init__.py                       0
-│   ├── app.py                          279
+│   ├── app.py                          280
 │   ├── controllers.py                   66
-│   ├── scene.py                        288
+│   ├── scene.py                        300
 │   └── settings.py                      88
 │
 ├── test/
@@ -421,7 +425,7 @@ analytic_control/
 │   ├── test_pico_bridge.py              47
 │   ├── test_ros_output.py               76
 │   ├── test_settings.py                 63
-│   └── test_ui.py                      135
+│   └── test_ui.py                      142
 │
 ├── requirements.txt
 ├── pytest.ini                             4
@@ -435,11 +439,11 @@ Source code totals, excluding this README, requirements, and pytest.ini:
 |---|---:|---:|
 | Core control and kinematics | 17 | 3,092 |
 | PICO bridge | 4 | 341 |
-| NiceGUI | 5 | 721 |
-| Tests | 10 | 1,072 |
+| NiceGUI | 5 | 734 |
+| Tests | 10 | 1,079 |
 | Setup | 1 | 21 |
 | Hardware debug tool | 1 | 21 |
-| **Total** | **38** | **5,268** |
+| **Total** | **38** | **5,288** |
 
 `nero_urdf/meshes/*.stl` are runtime assets, not code. `apk/`, `build/`,
 generated `.pyd`/`.c` files, and `logs/` are excluded from the code count.

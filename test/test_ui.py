@@ -8,6 +8,7 @@ from config import ControlConfig
 from controller_state import ControlSnapshot, SnapshotStore
 from logging_utils import LogBuffer
 from ui.app import TABS, _pico_state, build_page, status_background
+from ui.scene import CAMERA_FOV, CAMERA_POSITION
 
 UI = Path(__file__).resolve().parents[1] / "ui"
 FORBIDDEN = (
@@ -44,6 +45,11 @@ def test_ui_strings_are_english_and_hide_removed_controls():
 
 def test_arm_simulation_is_first_and_default_tab():
     assert TABS == ["Arm Simulation", "Controllers", "Settings"]
+
+
+def test_scene_camera_is_zoomed_in():
+    assert CAMERA_FOV < 75
+    assert CAMERA_POSITION != (1.7, -2.3, 1.8)
 
 
 def test_status_colors_cover_running_waiting_and_fault_states():
@@ -88,6 +94,7 @@ async def test_page_builds_with_english_shell_and_system_log():
         await user.should_see("Startup Pose")
         await user.should_see("Base Frames")
         await user.should_see("Restore Defaults")
+        await user.should_see("Head / Horizon")
         await user.should_see("STOP")
 
 
