@@ -7,9 +7,29 @@ if (-not (Test-Path $vcvars)) {
 if (-not (Test-Path $vcvars)) {
     throw "vcvars64.bat not found. Install Visual Studio Build Tools with the C++ workload."
 }
+
+if ($env:CONDA_PREFIX) {
+    $python = Join-Path $env:CONDA_PREFIX "python.exe"
+} else {
+    $python = (Get-Command python -ErrorAction Stop).Source
+}
+if (-not (Test-Path $python)) {
+    throw "Python executable not found: $python. Activate the existing conda environment first."
+}
+
+& $python -c "import Cython" 2>$null
+if ($LASTEXITCODE -ne 0) {
+    throw "Cython is not installed in $python. Activate the environment and run: pip install -r requirements.txt"
+}
+
+Write-Host "Building IK with $python"
 Push-Location $root
 try {
-    cmd /c "call `"$vcvars`" >nul && python setup.py build_ext --inplace"
+    $command = "call `"$vcvars`" >nul 2>&1 && `"$python`" setup.py build_ext --inplace 2>&1"
+    cmd /c $command
+    if ($LASTEXITCODE -ne 0) {
+        throw "IK build failed with exit code $LASTEXITCODE"
+    }
 } finally {
     Pop-Location
 }

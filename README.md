@@ -88,6 +88,10 @@ environment. It does not create an environment.
 
 ### Build the IK extension
 
+Activate the existing environment before running either build script. The
+scripts use the active environment's Python executable
+(`$CONDA_PREFIX/python.exe` on Windows and `$CONDA_PREFIX/bin/python` on Linux).
+
 Linux:
 
 ```bash
@@ -375,8 +379,8 @@ analytic_control/
 │   └── test_ui.py                      129
 │
 ├── scripts/
-│   ├── build_ik.ps1                     15
-│   └── build_ik.sh                       4
+│   ├── build_ik.ps1                     35
+│   └── build_ik.sh                      16
 │
 ├── requirements.txt
 ├── pytest.ini                             4
@@ -391,9 +395,9 @@ Source code totals, excluding this README, requirements, and pytest.ini:
 | PICO bridge | 4 | 341 |
 | NiceGUI | 4 | 629 |
 | Tests | 9 | 1,003 |
-| Build scripts and setup | 3 | 40 |
+| Build scripts and setup | 3 | 72 |
 | Hardware debug tool | 1 | 21 |
-| **Total** | **37** | **5,025** |
+| **Total** | **37** | **5,057** |
 
 `nero_urdf/meshes/*.stl` are runtime assets, not code. `apk/`, `build/`,
 generated `.pyd`/`.c` files, and `logs/` are excluded from the code count.
@@ -428,6 +432,9 @@ Coverage includes:
 
 - `ik_solver` import fails: build it with `scripts/build_ik.ps1` or
   `scripts/build_ik.sh`.
+- `ModuleNotFoundError: No module named 'Cython'`: activate the existing
+  environment and run `pip install -r requirements.txt`, then build again. The
+  build scripts report the Python executable they are using.
 - PICO not found: check `adb devices`, USB debugging, and the APK package. The
   bridge retries ADB automatically.
 - Real arm connection fails: verify the SocketCAN channel and bitrate.
