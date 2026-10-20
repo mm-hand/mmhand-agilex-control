@@ -379,7 +379,7 @@ analytic_control/
 │   └── test_ui.py                      129
 │
 ├── scripts/
-│   ├── build_ik.ps1                     35
+│   ├── build_ik.ps1                     41
 │   └── build_ik.sh                      16
 │
 ├── requirements.txt
@@ -395,9 +395,9 @@ Source code totals, excluding this README, requirements, and pytest.ini:
 | PICO bridge | 4 | 341 |
 | NiceGUI | 4 | 629 |
 | Tests | 9 | 1,003 |
-| Build scripts and setup | 3 | 72 |
+| Build scripts and setup | 3 | 78 |
 | Hardware debug tool | 1 | 21 |
-| **Total** | **37** | **5,057** |
+| **Total** | **37** | **5,063** |
 
 `nero_urdf/meshes/*.stl` are runtime assets, not code. `apk/`, `build/`,
 generated `.pyd`/`.c` files, and `logs/` are excluded from the code count.
