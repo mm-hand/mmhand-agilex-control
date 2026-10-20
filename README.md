@@ -67,26 +67,43 @@ block the UI or the controller.
 
 ## Installation
 
-### Linux
+Use an existing conda environment. Do not create a new environment. The
+following examples assume the existing environment is named `mmhand`; replace it
+with the environment you already use.
+
+The environment must already provide Python 3.12 and, for ROS 2 output, the
+ROS 2 Python packages (`rclpy`, `geometry_msgs`, `std_msgs`). If those packages
+are missing, install them into the same environment with conda; do not clone the
+environment.
+
+### Install Python dependencies
 
 ```bash
-conda env create -f environment.yml
-conda activate mmhand-ros
+conda activate mmhand
+pip install -r requirements.txt
+```
+
+`requirements.txt` installs the project dependencies into the active conda
+environment. It does not create an environment.
+
+### Build the IK extension
+
+Linux:
+
+```bash
 python scripts/build_ik.sh
 ```
 
-For real-arm use, initialize the SDK submodule:
+Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build_ik.ps1
+```
+
+For real-arm use on Linux, initialize the SDK submodule:
 
 ```bash
 git submodule update --init --recursive
-```
-
-### Windows
-
-```powershell
-conda env create -f environment-windows.yml
-conda activate nero-teleop
-powershell -ExecutionPolicy Bypass -File scripts/build_ik.ps1
 ```
 
 Windows supports simulation, GUI, IPC, and ROS 2 output. Real Nero arms require
@@ -361,14 +378,12 @@ analytic_control/
 │   ├── build_ik.ps1                     15
 │   └── build_ik.sh                       4
 │
-├── environment.yml                      22
-├── environment-windows.yml              12
-├── requirements.txt                     10
+├── requirements.txt
 ├── pytest.ini                             4
 └── README.md
 ```
 
-Source code totals, excluding this README and environment files:
+Source code totals, excluding this README, requirements, and pytest.ini:
 
 | Group | Files | Lines |
 |---|---:|---:|
@@ -418,5 +433,15 @@ Coverage includes:
 - Real arm connection fails: verify the SocketCAN channel and bitrate.
 - Port already in use: `run.py` selects the next free port; pass `--port`,
   `--vr-port`, or `--ipc-port` explicitly if needed.
-- ROS 2 output says `UNAVAILABLE`: activate an environment with `rclpy` and
-  `geometry_msgs`, then toggle it again.
+- ROS 2 output says `UNAVAILABLE`: the active environment needs `rclpy`,
+  `geometry_msgs`, and `std_msgs`. Install them into the same environment with
+  conda, then toggle again:
+  ```bash
+  conda install -c conda-forge -c robostack-jazzy \
+    ros-jazzy-ros-base ros-jazzy-geometry-msgs ros-jazzy-std-msgs
+  ```
+- NumPy matrix operations crash with a DLL or OpenBLAS error: reinstall NumPy
+  into the same environment:
+  ```bash
+  python -m pip install --force-reinstall --no-cache-dir "numpy>=1.26"
+  ```

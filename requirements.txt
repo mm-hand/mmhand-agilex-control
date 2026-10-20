@@ -1,7 +1,10 @@
+# Install into the existing conda environment:
+#   conda activate mmhand
+#   pip install -r requirements.txt
 numpy>=1.26
 nicegui==3.16.0
 cython>=3.0.0
-setuptools>=83.0.0
+setuptools>=79.0.0
 wheel>=0.47.0
 python-can>=3.3.4
 pyusb
