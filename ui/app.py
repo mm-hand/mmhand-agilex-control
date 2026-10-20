@@ -153,7 +153,7 @@ def build_page(controller, store, config, log_buffer: LogBuffer) -> None:
             connect_button.on("click", lambda _=None: connect_dialog.open())
             ui.space()
             ros_switch = ui.switch("ROS 2 Output")
-            reset_button = ui.button("Reset STOP").props("outline")
+            reset_button = ui.button("Reset").props("outline")
             reset_button.set_visibility(False)
             with reset_button:
                 ui.tooltip("Reset is available after the current hardware operation finishes.")

@@ -253,7 +253,7 @@ all connected arms.
 `STOP` is a latched emergency stop. It stops new targets, keeps all connected
 arms at their current joint positions, and disables further control.
 
-After the hardware operation finishes, a `Reset STOP` button appears. Resetting:
+After the hardware operation finishes, a `Reset` button appears. Resetting:
 
 - clears the STOP latch
 - returns the simulation to the startup pose

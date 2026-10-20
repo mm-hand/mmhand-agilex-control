@@ -111,7 +111,7 @@ async def test_reset_stop_button_is_visible_after_stop():
     ) as user:
         await user.open("/")
         await asyncio.sleep(0.2)
-        await user.should_see("Reset STOP")
+        await user.should_see("Reset")
 
 
 async def test_real_feedback_creates_ghost_arm():
