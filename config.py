@@ -103,7 +103,7 @@ class FilterConfig:
 @dataclass(frozen=True)
 class StartupConfig:
     left_pose_rad: tuple[float, ...] = (-0.241867326795, 1.421239, -0.917729, 1.662461, -0.391128, 0.455112, -0.159994)
-    right_pose_rad: tuple[float, ...] = (1.328929, 1.421239, 2.223864, 1.662461, -0.391128, 0.455112, -0.159994)
+    right_pose_rad: tuple[float, ...] = (1.812663609075084, 1.4212388878235491, 0.9177285130965828, 1.6624601013312166, -2.7504255081459426, 0.4551165007189752, 0.1599672925762848)
     enable_startup_pose: bool = True
 
 
