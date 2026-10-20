@@ -50,7 +50,7 @@ class FrameTransformConfig:
     translation_left_shoulder_to_left_arm_base_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
     rotation_left_shoulder_to_left_arm_base_rpy_deg: tuple[float, float, float] = (-90.0, 0.0, 90.0)
     translation_right_shoulder_to_right_arm_base_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
-    rotation_right_shoulder_to_right_arm_base_rpy_deg: tuple[float, float, float] = (0.0, -90.0, 180.0)
+    rotation_right_shoulder_to_right_arm_base_rpy_deg: tuple[float, float, float] = (-90.0, 0.0, -90.0)
     translation_horizon_to_left_shoulder_m: tuple[float, float, float] = (-0.16, 0.0, 0.0)
     translation_horizon_to_right_shoulder_m: tuple[float, float, float] = (0.16, 0.0, 0.0)
     translation_controller_to_flange_m: tuple[float, float, float] = (0.0, -0.03, 0.065)
