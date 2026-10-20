@@ -82,10 +82,6 @@ class IpcServer:
         self._client: _Client | None = None
         self._lock = asyncio.Lock()
 
-    @property
-    def connected(self) -> bool:
-        return self._client is not None
-
     async def start(self) -> None:
         self._server = await asyncio.start_server(self._handle, self.host, self.port)
 

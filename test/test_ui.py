@@ -1,0 +1,129 @@
+from __future__ import annotations
+
+import ast
+import asyncio
+from pathlib import Path
+
+from config import ControlConfig
+from controller_state import ControlSnapshot, SnapshotStore
+from logging_utils import LogBuffer
+from ui.app import TABS, _pico_state, build_page, status_background
+
+UI = Path(__file__).resolve().parents[1] / "ui"
+FORBIDDEN = (
+    "Return to Initial Pose",
+    "Pause Teleop",
+    "Sync Real Arm",
+    "Base pose",
+    "Iso",
+    "Top",
+    "Front",
+    "Reset View",
+)
+
+
+class FakeController:
+    def submit(self, command) -> None:
+        pass
+
+
+def test_ui_strings_are_english_and_hide_removed_controls():
+    strings = []
+    for path in UI.glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        strings.extend(
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        )
+    joined = "\n".join(strings)
+    assert not any("\u4e00" <= char <= "\u9fff" for char in joined)
+    for text in FORBIDDEN:
+        assert text not in joined
+
+
+def test_arm_simulation_is_first_and_default_tab():
+    assert TABS == ["Arm Simulation", "Controllers"]
+
+
+def test_status_colors_cover_running_waiting_and_fault_states():
+    assert status_background("TELEOP") == "#bbf7d0"
+    assert status_background("CONNECTED 96Hz") == "#bbf7d0"
+    assert status_background("ALIGNING") == "#bfdbfe"
+    assert status_background("WAITING") == "#fde68a"
+    assert status_background("STOPPED") == "#fecaca"
+    assert status_background("SIM") == "#e2e8f0"
+
+
+def test_pico_state_requires_live_frames():
+    assert _pico_state({"connected": False, "adb": "waiting"}) == "WAITING"
+    assert _pico_state({"connected": True, "adb": "connected", "rate_hz": 96.2}) == "CONNECTED 96Hz"
+    assert _pico_state({"connected": False, "adb": "error"}) == "ERROR"
+
+
+async def test_page_builds_with_english_shell_and_system_log():
+    from nicegui.testing.user_simulation import user_simulation
+
+    store = SnapshotStore()
+    store.publish(ControlSnapshot(phase="TELEOP"))
+    config = ControlConfig()
+    buffer = LogBuffer()
+    buffer.append("control", "system log line")
+
+    async with user_simulation(
+        root=lambda: build_page(FakeController(), store, config, buffer)
+    ) as user:
+        await user.open("/")
+        await user.should_see("AgileX Nero Teleop")
+        await user.should_see("Connect Arms")
+        await user.should_see("Arm Simulation")
+        await user.should_see("Controllers")
+        await user.should_see("System Log")
+        await user.should_see("system log line")
+        await user.should_see("SYSTEM: TELEOP")
+        await user.should_see("ROS2 Output")
+        await user.should_see("STOP")
+
+
+async def test_real_feedback_creates_ghost_arm():
+    from nicegui.testing.user_simulation import user_simulation
+
+    store = SnapshotStore()
+    config = ControlConfig()
+    buffer = LogBuffer()
+
+    async with user_simulation(
+        root=lambda: build_page(FakeController(), store, config, buffer)
+    ) as user:
+        await user.open("/")
+        store.publish(
+            ControlSnapshot(
+                phase="TELEOP",
+                real_q={"left": (0.1,) * 7, "right": None},
+            )
+        )
+        await asyncio.sleep(0.3)
+
+
+async def test_handoff_dialog_opens_for_connected_arms():
+    from nicegui.testing.user_simulation import user_simulation
+
+    store = SnapshotStore()
+    config = ControlConfig()
+    buffer = LogBuffer()
+
+    async with user_simulation(
+        root=lambda: build_page(FakeController(), store, config, buffer)
+    ) as user:
+        await user.open("/")
+        store.publish(
+            ControlSnapshot(
+                phase="HANDOFF",
+                handoff_id=1,
+                handoff_sides=("left",),
+            )
+        )
+        await asyncio.sleep(0.3)
+        await user.should_see("Real Arm Handoff")
+        await user.should_see("Connected arms: LEFT")
+        await user.should_see("I have verified the simulated and real arm bases match.")

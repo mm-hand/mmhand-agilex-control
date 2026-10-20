@@ -20,7 +20,6 @@ from control_loop import ArmController
 from controller_state import SnapshotStore
 from logging_utils import LogBuffer, configure_logging
 from pose_source import DemoPoseSource, IpcPoseSource
-from run_log import SessionLogger
 
 ROOT = Path(__file__).resolve().parent
 
@@ -123,7 +122,6 @@ def parse_args(argv=None):
     parser.add_argument("--vr-port", type=int, default=0, help="PICO ingest port")
     parser.add_argument("--ipc-port", type=int, default=0, help="IPC port")
     parser.add_argument("--no-browser", action="store_true", help="do not open the browser")
-    parser.add_argument("--ros-output", action="store_true", help="enable ROS 2 output at startup")
     return parser.parse_args(argv)
 
 
@@ -135,11 +133,8 @@ def main(argv=None) -> int:
     vr_port = find_free_port(config.pico.ingest_host, args.vr_port or config.pico.vr_port)
     ipc_port = find_free_port(config.ipc.host, args.ipc_port or config.ipc.port)
     ui_port = find_free_port(config.gui.host, args.port or config.gui.port, config.gui.port_span)
-    if args.ros_output:
-        config = replace(config, ros_output=replace(config.ros_output, enabled_default=True))
     buffer = LogBuffer()
-    session = SessionLogger(config.log, "teleop")
-    logger = configure_logging(config.log, session.text_log_path, buffer)
+    logger = configure_logging(config.log, buffer)
     supervisor = PicoSupervisor(config, vr_port, ipc_port, buffer, logger, no_pico)
     supervisor.start()
     if args.demo:
@@ -150,7 +145,7 @@ def main(argv=None) -> int:
     store = SnapshotStore()
     controller = None
     try:
-        controller = ArmController(config, logger, session, pose_source, store)
+        controller = ArmController(config, logger, pose_source, store)
         controller.start()
         if args.headless:
             logger.info("headless control started; Ctrl+C to stop")
@@ -173,7 +168,6 @@ def main(argv=None) -> int:
         pose_source.send_command("shutdown")
         pose_source.close()
         supervisor.stop()
-        session.close(logger)
 
 
 if __name__ == "__main__":

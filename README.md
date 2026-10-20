@@ -1,33 +1,73 @@
 # AgileX Nero Teleop
 
-PICO 4 Ultra controller teleoperation for AgileX Nero arms. The repository
-contains the headset receiver, the analytic IK controller, a NiceGUI console,
-and the PICO APK sources.
+PICO 4 Ultra controller teleoperation for AgileX Nero arms.
+
+The repository contains:
+
+- a PICO headset receiver with ADB setup
+- a two-process teleoperation controller
+- analytic seven-axis inverse kinematics
+- a NiceGUI web console
+- a URDF/STL-based dual-arm simulation
+- optional ROS 2 publishing
+- the PICO APK sources and prebuilt APK
+
+## System Architecture
 
 The application runs as two Python processes:
 
 ```text
 python run.py
-|- parent process: NiceGUI + ArmController thread
-`- pico_bridge child process: ADB, PICO TCP receiver, IPC server
+├── parent process
+│   ├── NiceGUI web console
+│   ├── ArmController thread
+│   ├── simulation state
+│   ├── real-arm backends
+│   └── optional ROS 2 publisher
+└── pico_bridge child process
+    ├── ADB reverse and APK launch
+    ├── PICO TCP receiver
+    └── local IPC server
 ```
 
-The two processes talk over a local NDJSON TCP connection on `127.0.0.1:9101`.
-The GUI and the controller share an in-memory snapshot and command queue.
+Data flow:
+
+```text
+PICO APK
+  │ TCP 29761
+  ▼
+adb reverse
+  ▼
+pico_bridge
+  │ NDJSON over 127.0.0.1:9101
+  ▼
+IpcPoseSource
+  ▼
+ArmController ──► simulation q ──► NiceGUI 3D scene
+      │
+      ├──► RealArmBackend (left/right, SocketCAN)
+      └──► RosOutput (/nero/left/*, /nero/right/*)
+```
+
+The GUI and controller share an immutable snapshot and a command queue. The
+PICO bridge is a separate process so headset reconnects and ADB failures do not
+block the UI or the controller.
 
 ## Requirements
 
-- Linux for real Nero arms (SocketCAN `can0`, `can1`, ...).
-- Windows or Linux for simulation, the GUI, and the PICO bridge.
-- Python 3.12 recommended.
-- PICO 4 Ultra with the supplied APK installed and USB debugging authorized.
-- `adb` available in `PATH` or configured through `PicoConfig.adb_path`.
-- Visual Studio Build Tools with the C++ workload on Windows, or a C compiler
-  on Linux, to build the Cython IK solver.
+- Python 3.12 recommended
+- Linux for real Nero arms with SocketCAN
+- Windows or Linux for simulation, GUI, and PICO bridge
+- PICO 4 Ultra with the supplied APK installed
+- USB debugging enabled and authorized
+- `adb` available in `PATH` or configured in `PicoConfig.adb_path`
+- Cython and a C/C++ compiler
+  - Visual Studio Build Tools with the C++ workload on Windows
+  - a C compiler such as GCC on Linux
 
-## Install
+## Installation
 
-Linux with RoboStack Jazzy:
+### Linux
 
 ```bash
 conda env create -f environment.yml
@@ -35,7 +75,13 @@ conda activate mmhand-ros
 python scripts/build_ik.sh
 ```
 
-Windows simulation environment:
+For real-arm use, initialize the SDK submodule:
+
+```bash
+git submodule update --init --recursive
+```
+
+### Windows
 
 ```powershell
 conda env create -f environment-windows.yml
@@ -43,33 +89,46 @@ conda activate nero-teleop
 powershell -ExecutionPolicy Bypass -File scripts/build_ik.ps1
 ```
 
-Real-arm use on Linux also requires the `pyAgxArm` submodule:
+Windows supports simulation, GUI, IPC, and ROS 2 output. Real Nero arms require
+Linux SocketCAN.
+
+### PICO APK
+
+Install the prebuilt APK:
 
 ```bash
-git submodule update --init --recursive
+adb install -r apk/generated_apk/pico_head_relative_pose.apk
 ```
 
-## Run
+The `pico_bridge` process runs `adb reverse` and launches the APK automatically.
+
+## Running
 
 ```bash
 python run.py
 ```
 
-The GUI opens automatically at `http://127.0.0.1:8080`, or on the next free
-port. The first tab is always `Arm Simulation`.
+The GUI opens at `http://127.0.0.1:8080`, or on the next free port.
 
-Useful options:
+Options:
 
 ```text
---no-pico          Do not start the PICO bridge.
---demo             Use synthetic controller motion; implies --no-pico.
---headless         Run the controller without NiceGUI.
---duration SEC     Headless run time.
---port PORT        GUI port.
---vr-port PORT     PICO TCP port on the PC.
---ipc-port PORT    PICO bridge IPC port.
---no-browser       Do not open a browser.
---ros-output       Enable ROS 2 output at startup.
+--no-pico          do not start the PICO bridge
+--demo             use synthetic controller motion; implies --no-pico
+--headless         run the controller without NiceGUI
+--duration SEC     headless run time
+--port PORT        GUI port
+--vr-port PORT     PICO TCP port on the PC
+--ipc-port PORT    PICO bridge IPC port
+--no-browser       do not open a browser
+```
+
+Examples:
+
+```bash
+python run.py
+python run.py --no-pico --demo
+python run.py --no-pico --headless --duration 5
 ```
 
 ## GUI
@@ -79,102 +138,285 @@ Top bar:
 - `AgileX Nero Teleop`
 - `Connect Arms`
 - `ROS2 Output` switch
-- `STOP` on the right
+- `STOP`
 
-Status bar: colored chips for system phase, PICO input, left/right controller
-tracking, left/right arm state, and ROS 2 output.
+The status bar contains colored chips for:
+
+- system phase
+- PICO input
+- left/right controller tracking
+- left/right arm state
+- ROS 2 output
 
 Tabs:
 
-- `Arm Simulation` (default): full-width 3D view of both arms. Blue is left,
-  orange is right, semi-transparent green is real-arm feedback.
-- `Controllers`: live position, quaternion, yaw/pitch/roll, and button states
-  for both PICO controllers.
+- `Arm Simulation` (first tab and default): full-width 3D view of both arms
+- `Controllers`: live pose and button state for both PICO controllers
 
-The bottom `System Log` panel is resizable. Drag the divider to change its
-height. It shows control, PICO bridge, and GUI events.
+The bottom `System Log` is resizable. Drag the divider to change its height.
 
-## Connect arms
+## Operating the Arms
+
+### Connecting arms
 
 `Connect Arms` opens independent left and right rows. Each row has its own CAN
-channel and `Connect` / `Disconnect` button. Connect what you need:
+channel and `Connect` / `Disconnect` button.
 
-- No arm connected: pure simulation.
-- Left only: left commands go to the real left arm; the right side stays
-  simulated.
-- Right only: right commands go to the real right arm; the left side stays
-  simulated.
-- Both: both sides are real; both receive the same teleoperation targets.
+- No arm connected: pure simulation
+- Left only: left arm uses hardware, right arm remains simulated
+- Right only: right arm uses hardware, left arm remains simulated
+- Both: both arms use hardware
 
 Left and right must use different CAN channels.
 
-When real arms are connected, the simulation first moves to the configured
-startup pose. A `Real Arm Handoff` dialog then asks you to verify that the
-simulated arm bases match the real arm bases. `Confirm and Move` is disabled
-until the verification checkbox is selected. Confirming moves every connected
-real arm to the startup pose and enters servo teleoperation. `Cancel` does not
-send motion and disconnects the real arms.
+### Handoff
 
-If a new arm is connected during teleoperation, the simulation returns to the
-startup pose, the already-following arms hold, and the handoff dialog is shown
-again for all connected arms.
+After connecting real arms, the simulation moves to the configured startup pose.
+A `Real Arm Handoff` dialog then asks the operator to verify that each simulated
+arm base matches its real arm base. `Confirm and Move` is disabled until the
+verification checkbox is selected.
+
+Confirming moves every connected real arm to the startup pose and enters servo
+teleoperation. Cancelling sends no motion and disconnects the real arms.
+
+If a new arm connects during teleoperation, the simulation returns to the
+startup pose, the following arms hold, and the handoff dialog is shown again for
+all connected arms.
+
+### STOP
 
 `STOP` is a latched emergency stop. It stops new targets, keeps all connected
-arms at their current joint positions, and disables further control. Restart
-the process to resume.
+arms at their current joint positions, and disables further control. Restart the
+process to resume.
 
-## ROS 2 output
+### Logging
 
-The GUI switch is off by default. When enabled, the PICO bridge publishes the
-input topics and the controller publishes the arm topics. ROS 2 is imported
-lazily, so a missing ROS 2 installation does not prevent simulation.
-
-PICO input:
+Runtime messages go to the console, the GUI `System Log`, and a rotating file:
 
 ```text
-/read_pose/poses      geometry_msgs/PoseArray
-/read_pose/buttons    std_msgs/UInt32MultiArray
-/read_pose/tracked    std_msgs/UInt8MultiArray
+logs/control.log
 ```
 
-Nero arms:
+The file log is enabled by `LogConfig.enabled`. The GUI log is resizable and
+shows control and PICO bridge events.
+
+### ROS 2 output
+
+The switch is off by default. When enabled, the PICO bridge publishes the input
+topics and the controller publishes the arm topics:
 
 ```text
-/nero/left/current_joint_angles_deg       std_msgs/Float64MultiArray
-/nero/left/target_joint_angles_deg        std_msgs/Float64MultiArray
-/nero/left/current_end_effector_pose      geometry_msgs/PoseStamped
-/nero/left/target_end_effector_pose       geometry_msgs/PoseStamped
+/read_pose/poses
+/read_pose/buttons
+/read_pose/tracked
+
+/nero/left/current_joint_angles_deg
+/nero/left/target_joint_angles_deg
+/nero/left/current_end_effector_pose
+/nero/left/target_end_effector_pose
+
+/nero/right/current_joint_angles_deg
+/nero/right/target_joint_angles_deg
+/nero/right/current_end_effector_pose
+/nero/right/target_end_effector_pose
 ```
 
-The same four topics exist under `/nero/right/`. Joint values are in degrees.
-End-effector poses use `pose_input_horizon` and are the flange pose computed by
-the analytic forward kinematics.
+Joint values are in degrees. End-effector poses are `geometry_msgs/PoseStamped`
+in `pose_input_horizon`.
 
-## Logs
+## How It Works
 
-Each run creates `logs/<timestamp>_teleop/` with `control.log` and
-`telemetry.csv`. The in-memory `System Log` shows the latest control and PICO
-bridge events; file logging stays available for longer sessions.
+### PICO input
 
-## Tests
+The APK sends one CSV line per controller sample:
+
+```text
+timestamp,left_valid,lx,ly,lz,lqx,lqy,lqz,lqw,
+right_valid,rx,ry,rz,rqx,rqy,rqz,rqw,left_buttons,right_buttons
+```
+
+Poses are expressed in a gravity-aligned horizon frame:
+
+```text
++X = right
++Y = up
+-Z = forward
+origin = head position
+orientation = yaw only
+```
+
+### IPC
+
+The PICO bridge and controller communicate over a local TCP connection:
+
+- NDJSON, one message per line
+- `pico_frame` for controller samples
+- `pico_status` for ADB and frame-rate state
+- `command` / `command_ack` for ROS output and shutdown
+- latest-frame semantics for high-rate input
+
+### Analytic IK
+
+`ik_solver.pyx` solves a seven-axis Nero arm from an end-effector pose:
+
+1. Sample the redundant arm angle `theta0`.
+2. Solve joints 1-4 geometrically from the elbow position.
+3. Extract joints 5-7 from the remaining wrist transform.
+4. Discard candidates outside joint limits.
+5. Score candidates by joint continuity, pose error, arm-angle change, and
+   joint-limit proximity.
+
+`ik.py` converts the flange target to the link-7 frame using the URDF
+`gripper_flange_joint` origin.
+
+### URDF mesh simulation
+
+The simulation uses the real Nero URDF and STL meshes:
+
+```text
+nero_urdf/nero.urdf
+nero_urdf/meshes/*.stl
+```
+
+`ui/scene.py` parses the URDF joint tree:
+
+- joint parent and child links
+- joint origin `xyz` and `rpy` (URDF `rpy` is in radians)
+- joint axis
+- visual mesh and visual origin
+
+Each joint is represented by a fixed origin group and a rotating group. Only
+the seven joint rotations are updated during teleoperation. The STL meshes are
+served by NiceGUI at `/nero_meshes/*.stl`.
+
+The left arm is blue, the right arm is orange, and real-arm feedback is drawn as
+a semi-transparent green ghost.
+
+### Filtering and motion limits
+
+The controller applies:
+
+- OneEuro pose filtering
+- input position and rotation limiting
+- IK output filtering
+- joint velocity, acceleration, and per-tick step limits
+- joint-limit margin clipping
+
+### Simulation and real arms
+
+Both sides always maintain a simulated joint state. A connected side also sends
+the same target to its real arm. When no PICO pose is available, that side holds
+its current target. During handoff, real arms move to the startup pose, enter
+servo hold, and then follow the teleoperation targets.
+
+## Code Structure and Line Counts
+
+Line counts are total file lines, including blank lines and comments.
+
+```text
+analytic_control/
+├── run.py                              174
+├── config.py                           160
+├── control_loop.py                     507
+├── controller_state.py                  67
+├── ipc.py                              238
+├── pose_source.py                      147
+├── ros_output.py                       131
+├── hardware.py                         404
+├── ik.py                                73
+├── ik_solver.pyx                       605
+├── filters.py                          149
+├── frames.py                            85
+├── motion.py                            81
+├── transforms.py                        67
+├── joint_feedback.py                    30
+├── logging_utils.py                     73
+├── read_joints.py                       21
+├── setup.py                             21
+│
+├── pico_bridge/
+│   ├── __init__.py                       0
+│   ├── __main__.py                      65
+│   ├── bridge.py                       191
+│   └── ros_output.py                    85
+│
+├── ui/
+│   ├── __init__.py                       0
+│   ├── app.py                          275
+│   ├── controllers.py                   66
+│   └── scene.py                        288
+│
+├── test/
+│   ├── __init__.py                       0
+│   ├── test_controller.py              164
+│   ├── test_hardware.py                349
+│   ├── test_ipc.py                      65
+│   ├── test_kinematics.py              131
+│   ├── test_logging.py                  42
+│   ├── test_pico_bridge.py              47
+│   ├── test_ros_output.py               76
+│   └── test_ui.py                      129
+│
+├── scripts/
+│   ├── build_ik.ps1                     15
+│   └── build_ik.sh                       4
+│
+├── environment.yml                      22
+├── environment-windows.yml              12
+├── requirements.txt                     10
+├── pytest.ini                             4
+└── README.md
+```
+
+Source code totals, excluding this README and environment files:
+
+| Group | Files | Lines |
+|---|---:|---:|
+| Core control and kinematics | 16 | 2,991 |
+| PICO bridge | 4 | 341 |
+| NiceGUI | 4 | 629 |
+| Tests | 9 | 1,003 |
+| Build scripts and setup | 3 | 40 |
+| Hardware debug tool | 1 | 21 |
+| **Total** | **37** | **5,025** |
+
+`nero_urdf/meshes/*.stl` are runtime assets, not code. `apk/`, `build/`,
+generated `.pyd`/`.c` files, and `logs/` are excluded from the code count.
+
+## Testing
 
 ```bash
 pytest -q
 ```
 
-The suite covers IK, motion limits, hardware behavior, IPC, PICO bridge helpers,
-the multi-arm controller state machine, ROS topic payloads, the 3D joint chain,
-and the English GUI shell. No real arm is required.
+Tests live in `test/`. `pytest.ini` sets:
+
+```ini
+testpaths = test
+pythonpath = .
+asyncio_mode = auto
+```
+
+Coverage includes:
+
+- analytic IK and motion limits
+- URDF chain versus analytic forward kinematics
+- real-arm feedback and motion behavior
+- two-process IPC
+- PICO bridge helpers
+- ROS 2 topic payloads
+- dual-arm handoff and STOP behavior
+- English UI, status colors, System Log, and handoff dialog
+- file and in-memory logging
 
 ## Troubleshooting
 
-- `ik_solver` import fails: run `scripts/build_ik.ps1` or
+- `ik_solver` import fails: build it with `scripts/build_ik.ps1` or
   `scripts/build_ik.sh`.
-- PICO not found: check `adb devices`, USB debugging, and the APK package.
-  The bridge retries ADB automatically.
-- Real arm connection requires Linux SocketCAN. Check `ip -details link show can0`
-  and the bitrate.
-- Port already in use: `run.py` chooses the next free port; pass `--port`,
+- PICO not found: check `adb devices`, USB debugging, and the APK package. The
+  bridge retries ADB automatically.
+- Real arm connection fails: verify the SocketCAN channel and bitrate.
+- Port already in use: `run.py` selects the next free port; pass `--port`,
   `--vr-port`, or `--ipc-port` explicitly if needed.
 - ROS 2 output says `UNAVAILABLE`: activate an environment with `rclpy` and
   `geometry_msgs`, then toggle it again.

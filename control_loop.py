@@ -49,14 +49,12 @@ class ArmController:
         self,
         config: ControlConfig,
         logger: logging.Logger,
-        session,
         pose_source,
         store: SnapshotStore,
         arm_factory=None,
     ) -> None:
         self.config = config
         self.logger = logger
-        self.session = session
         self.pose_source = pose_source
         self.store = store
         self.commands: queue.Queue[ControlCommand] = queue.Queue()
@@ -84,8 +82,6 @@ class ArmController:
         self._stop_motion = threading.Event()
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._run, name="arm-controller", daemon=True)
-        self._loop_hz = 0.0
-        self._next_record = 0.0
         self._pose_filters = {}
         self._limiters = {}
         self._target_filters = {}
@@ -93,9 +89,6 @@ class ArmController:
         store.publish(ControlSnapshot())
 
     def start(self) -> None:
-        if self.config.ros_output.enabled_default:
-            self.ros.set_enabled(True)
-            self.pose_source.send_command("set_ros_output", enabled=True)
         self._thread.start()
 
     def submit(self, command: ControlCommand) -> None:
@@ -112,18 +105,11 @@ class ArmController:
         try:
             self._begin_startup()
             period = 1.0 / self.config.motion.command_hz
-            last_rate_time = time.monotonic()
-            rate_count = 0
             while not self._stop_event.is_set():
                 started = time.monotonic()
                 self._poll_futures()
                 self._drain_commands()
                 self._tick()
-                rate_count += 1
-                if started - last_rate_time >= 1.0:
-                    self._loop_hz = rate_count / (started - last_rate_time)
-                    rate_count = 0
-                    last_rate_time = started
                 elapsed = time.monotonic() - started
                 self._stop_event.wait(max(0.0, period - elapsed))
         except Exception as exc:
@@ -155,8 +141,6 @@ class ArmController:
         for side in SIDES:
             target = _startup_pose(self.config, side)
             self._startup[side] = joint_trajectory(self.config.motion, self.sim_q[side], target)
-            if self.session:
-                self.session.event("startup_move", side, command_q=target)
         self._startup_index = 0
         self.phase = "STARTUP"
         for side in self.following:
@@ -192,8 +176,6 @@ class ArmController:
         self.handoff_id += 1
         self.handoff_sides = sides
         self.logger.info("handoff requested sides=%s", ",".join(sides))
-        if self.session:
-            self.session.event("handoff_request", "", sides=list(sides))
 
     def _reopen_handoff(self) -> None:
         if self.phase == "HANDOFF":
@@ -214,8 +196,6 @@ class ArmController:
             self._align_futures[side] = self._executor.submit(self._align_worker, side, backend)
         self.phase = "ALIGNING"
         self.logger.info("real arm alignment started sides=%s", ",".join(sorted(self.real_backends)))
-        if self.session:
-            self.session.event("handoff_confirm", "", sides=sorted(self.real_backends))
 
     def _align_worker(self, side: str, backend) -> np.ndarray:
         target = _startup_pose(self.config, side)
@@ -285,8 +265,6 @@ class ArmController:
         self.phase = "TELEOP"
         self.handoff_sides = ()
         self.logger.info("teleop started following=%s", ",".join(sorted(self.following)) or "none")
-        if self.session:
-            self.session.event("servo_hold", "", following=sorted(self.following))
 
     def _step_teleop(self) -> None:
         now = time.monotonic()
@@ -318,22 +296,6 @@ class ArmController:
         for side in SIDES:
             self.sim_q[side] = commands[side].copy()
             self._last_hold[side] = commands[side].copy()
-        if self.session is not None and now >= self._next_record:
-            self._next_record = now + 0.1
-            tracked = self.pose_source.tracked
-            connected = self.pose_source.connected()
-            for index, side in enumerate(SIDES):
-                frame = getattr(frames, side)
-                self.session.record(
-                    "teleop",
-                    side,
-                    connected=connected,
-                    tracked=bool(tracked[index]),
-                    pico_raw=raw[side],
-                    current_q=self.real_q[side] if side in self.following else commands[side],
-                    command_q=commands[side],
-                    target_flange=None if frame is None else frame.transform_arm_base_to_flange,
-                )
 
     def _hold_following(self) -> None:
         for side in self.following:
@@ -455,8 +417,6 @@ class ArmController:
             if side in self.real_backends:
                 self.arm_status[side] = replace(self.arm_status[side], state="STOPPED")
         self.logger.warning("STOP requested; holding all arms")
-        if self.session:
-            self.session.event("stop", "")
 
     def _set_ros(self, enabled: bool) -> None:
         ok = self.ros.set_enabled(enabled)
@@ -521,7 +481,6 @@ class ArmController:
                 handoff_id=self.handoff_id,
                 handoff_sides=self.handoff_sides,
                 error=self.error,
-                loop_hz=round(self._loop_hz, 1),
             )
         )
 

@@ -44,5 +44,4 @@ def test_status_reports_disabled_adb():
     bridge = PicoBridge(PicoConfig(), logging.getLogger("test"), no_adb=True)
     status = bridge._status()
     assert status["adb"] == "disabled"
-    assert status["headset"] is False
     assert status["rate_hz"] == 0.0

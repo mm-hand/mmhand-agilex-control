@@ -73,11 +73,9 @@ class PicoBridge:
         self._stop = asyncio.Event()
         self._adb_ready = False
         self._adb_error: str | None = None
-        self._clients = 0
         self._frames = 0
         self._rate_hz = 0.0
         self._rate_started = time.monotonic()
-        self._last_frame_at = 0.0
         self._tasks: list[asyncio.Task] = []
         self._ipc: IpcServer | None = None
         self._server: asyncio.AbstractServer | None = None
@@ -94,7 +92,6 @@ class PicoBridge:
         await self._stop.wait()
 
     async def _handle_ingest(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        self._clients += 1
         try:
             while not reader.at_eof():
                 line = await reader.readline()
@@ -104,12 +101,10 @@ class PicoBridge:
                 if frame is None:
                     continue
                 self._frames += 1
-                self._last_frame_at = time.monotonic()
                 if self._ipc is not None:
                     await self._ipc.send(frame, latest=True)
                 self.ros.publish(frame)
         finally:
-            self._clients = max(0, self._clients - 1)
             writer.close()
             try:
                 await writer.wait_closed()
@@ -167,7 +162,6 @@ class PicoBridge:
                 await self._ipc.send(self._status())
 
     def _status(self) -> dict:
-        age_ms = None if self._last_frame_at <= 0.0 else round((time.monotonic() - self._last_frame_at) * 1000.0)
         if self.no_adb:
             adb = "disabled"
         elif self._adb_ready:
@@ -176,15 +170,7 @@ class PicoBridge:
             adb = "error"
         else:
             adb = "waiting"
-        return {
-            "type": "pico_status",
-            "adb": adb,
-            "headset": self._clients > 0,
-            "rate_hz": round(self._rate_hz, 1),
-            "frame_age_ms": age_ms,
-            "ros_output": self.ros.enabled,
-            "error": self._adb_error if adb == "error" else None,
-        }
+        return {"type": "pico_status", "adb": adb, "rate_hz": round(self._rate_hz, 1)}
 
     def stop(self) -> None:
         self._stop.set()

@@ -12,8 +12,6 @@ from config import LogConfig
 
 
 class LogBuffer:
-    """Thread-safe in-memory log used by the NiceGUI System Log."""
-
     def __init__(self, max_lines: int = 5000) -> None:
         self._lock = threading.Lock()
         self._lines: deque[tuple[int, str]] = deque(maxlen=max_lines)
@@ -28,18 +26,10 @@ class LogBuffer:
             self._sequence += 1
             self._lines.append((self._sequence, line))
 
-    def since(self, sequence: int) -> list[str]:
-        return self.read_since(sequence)[0]
-
     def read_since(self, sequence: int) -> tuple[list[str], int]:
         with self._lock:
             lines = [line for seq, line in self._lines if seq > sequence]
             return lines, self._sequence
-
-    @property
-    def sequence(self) -> int:
-        with self._lock:
-            return self._sequence
 
 
 class LogBufferHandler(logging.Handler):
@@ -55,11 +45,7 @@ class LogBufferHandler(logging.Handler):
             self.handleError(record)
 
 
-def configure_logging(
-    config: LogConfig,
-    path: Path | None,
-    buffer: LogBuffer | None = None,
-) -> logging.Logger:
+def configure_logging(config: LogConfig, buffer: LogBuffer | None = None) -> logging.Logger:
     logger = logging.getLogger("analytic_control")
     logger.setLevel(logging.INFO)
     logger.handlers.clear()
@@ -70,13 +56,18 @@ def configure_logging(
     logger.addHandler(stream)
     if buffer is not None:
         logger.addHandler(LogBufferHandler(buffer, "control"))
-    if config.enabled and path is not None:
-        file_handler = RotatingFileHandler(
-            path,
-            maxBytes=config.max_bytes,
-            backupCount=config.backup_count,
-            encoding="utf-8",
-        )
-        file_handler.setFormatter(formatter)
-        logger.addHandler(file_handler)
+    if config.enabled:
+        try:
+            directory = Path(config.directory)
+            directory.mkdir(parents=True, exist_ok=True)
+            file_handler = RotatingFileHandler(
+                directory / "control.log",
+                maxBytes=config.max_bytes,
+                backupCount=config.backup_count,
+                encoding="utf-8",
+            )
+            file_handler.setFormatter(formatter)
+            logger.addHandler(file_handler)
+        except OSError as exc:
+            logger.warning("file logging unavailable: %s", exc)
     return logger

@@ -29,29 +29,16 @@ class FakeRobot:
         self.motor_q = np.zeros(7)
         self.timestamp = 1.0
         self.hz = 100.0
-        self.motor_available = True
-        self.diagnostic_reads = 0
 
     # Nero 1.10 may keep this timestamp static while updating msg.
     def get_joint_angles(self):
         return SimpleNamespace(msg=self.q.copy(), timestamp=self.timestamp)
     def get_motor_states(self, joint):
-        self.diagnostic_reads += 1
-        if not self.motor_available:
-            return None
         return SimpleNamespace(msg=SimpleNamespace(
             position=self.motor_q[joint - 1], velocity=0.0, current=float(joint), torque=0.0
         ), timestamp=self.timestamp, hz=self.hz)
 
-    def get_driver_states(self, joint):
-        self.diagnostic_reads += 1
-        return SimpleNamespace(msg=SimpleNamespace(
-            vol=48.0, foc_temp=30.0, motor_temp=31.0, bus_current=0.2,
-            foc_status=SimpleNamespace(driver_enable_status=True),
-        ))
-
     def get_arm_status(self):
-        self.diagnostic_reads += 1
         return SimpleNamespace(msg=SimpleNamespace(
             ctrl_mode=1, arm_status=0, mode_feedback=6, motion_status=0,
             err_status=SimpleNamespace(),
@@ -305,16 +292,6 @@ def test_real_backend_right_side():
     backend.close()
 
 
-def test_diagnostics_are_rate_limited():
-    backend, robot = _backend("left")
-    robot.diagnostic_reads = 0
-    diagnostics = backend.diagnostics()
-    assert diagnostics["motors"][0]["current"] == 1.0
-    assert robot.diagnostic_reads == 15
-    assert backend.diagnostics() is None
-    assert robot.diagnostic_reads == 15
-
-
 def test_current_feedback_uses_get_joint_angles():
     backend, robot = _backend("left")
     robot.q = np.full(7, -1.0)
@@ -365,7 +342,6 @@ if __name__ == "__main__":
     test_startup_move_refreshes_feedback()
     test_startup_does_not_require_reaching_target_or_fresh_timestamp()
     test_real_backend_right_side()
-    test_diagnostics_are_rate_limited()
     test_current_feedback_uses_get_joint_angles()
     test_stale_motor_feedback_keeps_last_valid_angles()
     test_startup_move_aborts_when_stopped()

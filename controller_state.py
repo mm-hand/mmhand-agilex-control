@@ -42,7 +42,6 @@ class ControlSnapshot:
     handoff_id: int = 0
     handoff_sides: tuple[str, ...] = ()
     error: str | None = None
-    loop_hz: float = 0.0
 
 
 @dataclass(frozen=True)

@@ -79,7 +79,7 @@ def _controller():
         arms[side] = FakeArm(side, arm_config, motion, logger)
         return arms[side]
 
-    controller = ArmController(config, logging.getLogger("test"), None, pose, store, arm_factory=factory)
+    controller = ArmController(config, logging.getLogger("test"), pose, store, arm_factory=factory)
     controller.start()
     try:
         yield controller, store, arms

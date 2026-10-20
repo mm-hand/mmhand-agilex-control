@@ -28,11 +28,3 @@ def read_feedback_sample(robot) -> JointFeedbackSample | None:
     ):
         return None
     return joint_q, joint_timestamp, motor_q, motor_timestamps
-
-
-def timestamp_hz(timestamps) -> float:
-    unique = np.unique(np.asarray(timestamps, dtype=float))
-    unique = unique[np.isfinite(unique)]
-    if unique.size < 2 or unique[-1] <= unique[0]:
-        return 0.0
-    return float((unique.size - 1) / (unique[-1] - unique[0]))

@@ -17,13 +17,7 @@ class IpcPoseSource:
         self._lock = threading.Lock()
         self._frame: dict | None = None
         self._received_at = 0.0
-        self._status: dict = {
-            "adb": "waiting",
-            "headset": False,
-            "rate_hz": 0.0,
-            "ros_output": False,
-            "error": None,
-        }
+        self._status: dict = {"adb": "waiting", "rate_hz": 0.0}
         self._count = 0
         self._rate_started = time.monotonic()
         self._rate_hz = 0.0
@@ -57,14 +51,8 @@ class IpcPoseSource:
             with self._lock:
                 self._status = {
                     "adb": message.get("adb", "unknown"),
-                    "headset": bool(message.get("headset", False)),
                     "rate_hz": float(message.get("rate_hz", 0.0)),
-                    "ros_output": bool(message.get("ros_output", False)),
-                    "error": message.get("error"),
                 }
-
-    def spin(self) -> None:
-        return None
 
     def _sample(self, side: str) -> ControllerPose | None:
         with self._lock:
@@ -100,23 +88,6 @@ class IpcPoseSource:
             int(frame.get("right", {}).get("buttons", 0)),
         )
 
-    @property
-    def tracked(self) -> tuple[int, int]:
-        with self._lock:
-            frame = self._frame
-            received_at = self._received_at
-        if frame is None or time.monotonic() - received_at > self.input_config.max_pose_age_s:
-            return (0, 0)
-        return (
-            int(bool(frame.get("left", {}).get("valid"))),
-            int(bool(frame.get("right", {}).get("valid"))),
-        )
-
-    def connected(self, _disconnect_s: float | None = None) -> bool:
-        with self._lock:
-            received_at = self._received_at
-        return received_at > 0.0 and time.monotonic() - received_at < self.input_config.disconnect_s
-
     def status(self) -> dict:
         with self._lock:
             received_at = self._received_at
@@ -124,7 +95,6 @@ class IpcPoseSource:
             rate = self._rate_hz or status.get("rate_hz", 0.0)
         status["connected"] = received_at > 0.0 and time.monotonic() - received_at < self.input_config.disconnect_s
         status["rate_hz"] = round(float(rate), 1)
-        status["frame_age_ms"] = None if received_at <= 0.0 else round((time.monotonic() - received_at) * 1000.0)
         return status
 
     def send_command(self, action: str, **payload) -> bool:
@@ -143,12 +113,8 @@ class DemoPoseSource:
     def __init__(self, input_config: PoseInputConfig) -> None:
         self.input_config = input_config
         self._started = time.monotonic()
-        self._ros_output = False
 
     def start(self) -> None:
-        return None
-
-    def spin(self) -> None:
         return None
 
     def _pose(self, side: str) -> ControllerPose:
@@ -171,27 +137,10 @@ class DemoPoseSource:
     def buttons(self) -> tuple[int, int]:
         return (0, 0)
 
-    @property
-    def tracked(self) -> tuple[int, int]:
-        return (1, 1)
-
-    def connected(self, _disconnect_s: float | None = None) -> bool:
-        return True
-
     def status(self) -> dict:
-        return {
-            "adb": "demo",
-            "headset": True,
-            "connected": True,
-            "rate_hz": 50.0,
-            "frame_age_ms": 0,
-            "ros_output": self._ros_output,
-            "error": None,
-        }
+        return {"adb": "demo", "connected": True, "rate_hz": 50.0}
 
     def send_command(self, action: str, **payload) -> bool:
-        if action == "set_ros_output":
-            self._ros_output = bool(payload.get("enabled"))
         return True
 
     def close(self) -> None:

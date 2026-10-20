@@ -7,7 +7,7 @@ from nicegui import app, ui
 from controller_state import ControlCommand
 from logging_utils import LogBuffer
 from ui.controllers import build_controllers
-from ui.simulation import build_simulation
+from ui.scene import MESH_DIR, build_scene
 
 TABS = ["Arm Simulation", "Controllers"]
 DEFAULT_CHANNELS = {"left": "can0", "right": "can1"}
@@ -154,7 +154,7 @@ def build_page(controller, store, config, log_buffer: LogBuffer) -> None:
             with workspace.before:
                 with ui.tab_panels(tabs, value=TABS[0], animated=False).classes("page-panels").props("keep-alive"):
                     with ui.tab_panel(TABS[0]).classes("w-full h-full"):
-                        simulation_refresh, visual = build_simulation(config)
+                        simulation_refresh, visual = build_scene(config)
                     with ui.tab_panel(TABS[1]).classes("w-full h-full controllers-panel"):
                         controllers_refresh = build_controllers()
             with workspace.separator:
@@ -257,6 +257,10 @@ def build_page(controller, store, config, log_buffer: LogBuffer) -> None:
 
 
 def run_ui(controller, store, config, log_buffer: LogBuffer, port: int, show: bool = True) -> None:
+    if not MESH_DIR.is_dir():
+        raise RuntimeError(f"URDF mesh directory not found: {MESH_DIR}")
+    app.add_static_files("/nero_meshes", str(MESH_DIR))
+
     @ui.page("/")
     def index() -> None:
         build_page(controller, store, config, log_buffer)
