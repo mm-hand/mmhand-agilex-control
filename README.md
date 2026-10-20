@@ -248,11 +248,20 @@ If a new arm connects during teleoperation, the simulation returns to the
 startup pose, the following arms hold, and the handoff dialog is shown again for
 all connected arms.
 
-### STOP
+### STOP and Reset
 
 `STOP` is a latched emergency stop. It stops new targets, keeps all connected
-arms at their current joint positions, and disables further control. Restart the
-process to resume.
+arms at their current joint positions, and disables further control.
+
+After the hardware operation finishes, a `Reset STOP` button appears. Resetting:
+
+- clears the STOP latch
+- returns the simulation to the startup pose
+- keeps connected real arms held
+- requires a new `Real Arm Handoff` confirmation before real arms move again
+
+For pure simulation, reset returns directly to teleoperation after the startup
+pose. A `FAULT` is not cleared by reset; restart the process after a fault.
 
 ### Logging
 
@@ -386,8 +395,8 @@ Line counts are total file lines, including blank lines and comments.
 analytic_control/
 ├── run.py                              183
 ├── config.py                           160
-├── control_loop.py                     507
-├── controller_state.py                  67
+├── control_loop.py                     529
+├── controller_state.py                  68
 ├── settings_store.py                    92
 ├── ipc.py                              238
 ├── pose_source.py                      147
@@ -412,14 +421,14 @@ analytic_control/
 │
 ├── ui/
 │   ├── __init__.py                       0
-│   ├── app.py                          280
+│   ├── app.py                          304
 │   ├── controllers.py                   66
 │   ├── scene.py                        300
 │   └── settings.py                      88
 │
 ├── test/
 │   ├── __init__.py                       0
-│   ├── test_controller.py              164
+│   ├── test_controller.py              193
 │   ├── test_hardware.py                349
 │   ├── test_ipc.py                      65
 │   ├── test_kinematics.py              131
@@ -427,7 +436,7 @@ analytic_control/
 │   ├── test_pico_bridge.py              47
 │   ├── test_ros_output.py               76
 │   ├── test_settings.py                 63
-│   └── test_ui.py                      142
+│   └── test_ui.py                      158
 │
 ├── requirements.txt
 ├── pytest.ini                             4
@@ -439,13 +448,13 @@ Source code totals, excluding this README, requirements, and pytest.ini:
 
 | Group | Files | Lines |
 |---|---:|---:|
-| Core control and kinematics | 17 | 3,092 |
+| Core control and kinematics | 17 | 3,115 |
 | PICO bridge | 4 | 341 |
-| NiceGUI | 5 | 734 |
-| Tests | 10 | 1,079 |
+| NiceGUI | 5 | 758 |
+| Tests | 10 | 1,124 |
 | Setup | 1 | 21 |
 | Hardware debug tool | 1 | 21 |
-| **Total** | **38** | **5,288** |
+| **Total** | **38** | **5,380** |
 
 `nero_urdf/meshes/*.stl` are runtime assets, not code. `apk/`, `build/`,
 generated `.pyd`/`.c` files, and `logs/` are excluded from the code count.

@@ -321,12 +321,16 @@ class ArmController:
             self._handle_command(command)
 
     def _handle_command(self, command: ControlCommand) -> None:
-        if self.phase in ("STOPPED", "FAULT") and command.kind not in ("STOP", "DISCONNECT"):
+        if self.phase == "FAULT":
+            return
+        if self.phase == "STOPPED" and command.kind not in ("STOP", "DISCONNECT", "RESET"):
             return
         if command.kind == "DISCONNECT" and (command.side in self._busy or self.phase == "ALIGNING"):
             return
         if command.kind == "STOP":
             self._stop_all()
+        elif command.kind == "RESET":
+            self._reset_stop()
         elif command.kind == "CONNECT":
             self._connect(command.side, command.channel)
         elif command.kind == "DISCONNECT":
@@ -418,6 +422,20 @@ class ArmController:
                 self.arm_status[side] = replace(self.arm_status[side], state="STOPPED")
         self.logger.warning("STOP requested; holding all arms")
 
+    def _reset_stop(self) -> None:
+        if self.phase != "STOPPED":
+            return
+        if self._busy or self._align_futures or self._connect_futures:
+            self.logger.warning("STOP reset deferred while a hardware operation is active")
+            return
+        self._stop_motion.clear()
+        self.error = None
+        self.handoff_sides = ()
+        for side in self.real_backends:
+            self.arm_status[side] = replace(self.arm_status[side], state="READY")
+        self.logger.warning("STOP reset; returning simulation to startup")
+        self._begin_startup()
+
     def _set_ros(self, enabled: bool) -> None:
         ok = self.ros.set_enabled(enabled)
         if ok:
@@ -481,6 +499,10 @@ class ArmController:
                 handoff_id=self.handoff_id,
                 handoff_sides=self.handoff_sides,
                 error=self.error,
+                can_reset=self.phase == "STOPPED"
+                and not self._busy
+                and not self._align_futures
+                and not self._connect_futures,
             )
         )
 

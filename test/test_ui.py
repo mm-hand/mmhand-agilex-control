@@ -98,6 +98,22 @@ async def test_page_builds_with_english_shell_and_system_log():
         await user.should_see("STOP")
 
 
+async def test_reset_stop_button_is_visible_after_stop():
+    from nicegui.testing.user_simulation import user_simulation
+
+    store = SnapshotStore()
+    store.publish(ControlSnapshot(phase="STOPPED", can_reset=True))
+    config = ControlConfig()
+    buffer = LogBuffer()
+
+    async with user_simulation(
+        root=lambda: build_page(FakeController(), store, config, buffer)
+    ) as user:
+        await user.open("/")
+        await asyncio.sleep(0.2)
+        await user.should_see("Reset STOP")
+
+
 async def test_real_feedback_creates_ghost_arm():
     from nicegui.testing.user_simulation import user_simulation
 

@@ -129,6 +129,23 @@ def build_page(controller, store, config, log_buffer: LogBuffer) -> None:
         confirm.on("click", lambda _=None: confirm_handoff())
         cancel.on("click", lambda _=None: cancel_handoff())
 
+    with ui.dialog().props("persistent") as reset_dialog, ui.card().classes("w-[560px] max-w-full"):
+        ui.label("Reset STOP").classes("font-semibold text-lg")
+        ui.label(
+            "STOP is latched. Reset returns the simulation to the startup pose. "
+            "Connected real arms stay held and must be confirmed through Real Arm Handoff before they move."
+        ).classes("text-sm whitespace-pre-wrap")
+        with ui.row().classes("w-full justify-end"):
+            reset_cancel = ui.button("Cancel").props("flat")
+            reset_confirm = ui.button("Reset").props("unelevated")
+
+        def confirm_reset() -> None:
+            controller.submit(ControlCommand("RESET"))
+            reset_dialog.close()
+
+        reset_cancel.on("click", lambda _=None: reset_dialog.close())
+        reset_confirm.on("click", lambda _=None: confirm_reset())
+
     with ui.element("div").classes("console-shell"):
         with ui.row().classes("connection-bar w-full"):
             ui.label("AgileX Nero Teleop").classes("connection-title")
@@ -136,6 +153,10 @@ def build_page(controller, store, config, log_buffer: LogBuffer) -> None:
             connect_button.on("click", lambda _=None: connect_dialog.open())
             ui.space()
             ros_switch = ui.switch("ROS 2 Output")
+            reset_button = ui.button("Reset STOP").props("outline")
+            reset_button.set_visibility(False)
+            with reset_button:
+                ui.tooltip("Reset is available after the current hardware operation finishes.")
             stop_button = ui.button("STOP").classes("stop-button").props("unelevated")
 
         with ui.row().classes("status-bar w-full"):
@@ -177,6 +198,7 @@ def build_page(controller, store, config, log_buffer: LogBuffer) -> None:
         controller.submit(ControlCommand("STOP"))
 
     stop_button.on("click", lambda _=None: stop_click())
+    reset_button.on("click", lambda _=None: reset_dialog.open())
 
     def ros_changed(event) -> None:
         if ros_syncing[0]:
@@ -214,6 +236,8 @@ def build_page(controller, store, config, log_buffer: LogBuffer) -> None:
         locked = system in ("STOPPED", "FAULT")
         connect_button.set_enabled(not locked)
         stop_button.set_enabled(not locked)
+        reset_button.set_visibility(system == "STOPPED")
+        reset_button.set_enabled(bool(snapshot.can_reset))
         ros_syncing[0] = True
         ros_switch.set_value(bool(snapshot.ros.get("enabled")))
         ros_switch.set_enabled(not locked and snapshot.ros.get("available") is not False)

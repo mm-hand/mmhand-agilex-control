@@ -42,6 +42,7 @@ class ControlSnapshot:
     handoff_id: int = 0
     handoff_sides: tuple[str, ...] = ()
     error: str | None = None
+    can_reset: bool = False
 
 
 @dataclass(frozen=True)
