@@ -11,6 +11,8 @@ logs/
 debug.log
 .nicegui/
 .venv*/
+settings.json
+settings.json.tmp
 
 /apk/target/
 /apk/generated_apk/*

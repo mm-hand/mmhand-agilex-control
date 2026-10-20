@@ -8,8 +8,9 @@ from controller_state import ControlCommand
 from logging_utils import LogBuffer
 from ui.controllers import build_controllers
 from ui.scene import MESH_DIR, build_scene
+from ui.settings import build_settings
 
-TABS = ["Arm Simulation", "Controllers"]
+TABS = ["Arm Simulation", "Controllers", "Settings"]
 DEFAULT_CHANNELS = {"left": "can0", "right": "can1"}
 
 CSS = """
@@ -29,6 +30,7 @@ body {background:#F5F7FA;color:#1e293b}
 .page-panels {flex:1;min-height:0;width:100%;overflow:hidden}
 .page-panels .q-tab-panel {padding:0;height:100%;display:flex;flex-direction:column;gap:0}
 .controllers-panel {padding:12px;overflow:auto;gap:12px}
+.settings-panel {padding:12px;overflow:auto;gap:12px}
 .sim-viewport {position:relative;flex:1;min-height:0;width:100%}
 .sim-viewport .nicegui-scene {width:100%;height:100%}
 .scene-legend {position:absolute;left:12px;bottom:10px;display:flex;gap:10px;font-size:11px;background:#ffffffcc;padding:4px 8px;border-radius:5px;pointer-events:none}
@@ -81,7 +83,7 @@ def build_page(controller, store, config, log_buffer: LogBuffer) -> None:
         rows = {}
         for side in ("left", "right"):
             with ui.row().classes("w-full items-center gap-2"):
-                ui.label(f"{side.upper()} ARM").classes("w-24 font-semibold text-xs")
+                ui.label(f"{side.title()} Arm").classes("w-24 font-semibold text-xs")
                 state = ui.label("SIM").classes("status-chip text-xs w-24")
                 channel = ui.input("Channel", value=DEFAULT_CHANNELS[side]).props("dense outlined").classes("w-28")
                 button = ui.button("Connect").props("dense outline")
@@ -132,18 +134,18 @@ def build_page(controller, store, config, log_buffer: LogBuffer) -> None:
             connect_button = ui.button("Connect Arms").props("dense outline")
             connect_button.on("click", lambda _=None: connect_dialog.open())
             ui.space()
-            ros_switch = ui.switch("ROS2 Output")
+            ros_switch = ui.switch("ROS 2 Output")
             stop_button = ui.button("STOP").classes("stop-button").props("unelevated")
 
         with ui.row().classes("status-bar w-full"):
             chips = {
-                "SYSTEM": ui.label().classes("status-chip text-xs"),
-                "PICO": ui.label().classes("status-chip text-xs"),
-                "L CTRL": ui.label().classes("status-chip text-xs"),
-                "R CTRL": ui.label().classes("status-chip text-xs"),
-                "L ARM": ui.label().classes("status-chip text-xs"),
-                "R ARM": ui.label().classes("status-chip text-xs"),
-                "ROS2": ui.label().classes("status-chip text-xs"),
+                "System": ui.label().classes("status-chip text-xs"),
+                "PICO Input": ui.label().classes("status-chip text-xs"),
+                "Left Control": ui.label().classes("status-chip text-xs"),
+                "Right Control": ui.label().classes("status-chip text-xs"),
+                "Left Arm": ui.label().classes("status-chip text-xs"),
+                "Right Arm": ui.label().classes("status-chip text-xs"),
+                "ROS 2": ui.label().classes("status-chip text-xs"),
             }
 
         with ui.tabs(value=TABS[0]).classes("console-tabs w-full").props("dense no-caps active-color=primary") as tabs:
@@ -157,6 +159,8 @@ def build_page(controller, store, config, log_buffer: LogBuffer) -> None:
                         simulation_refresh, visual = build_scene(config)
                     with ui.tab_panel(TABS[1]).classes("w-full h-full controllers-panel"):
                         controllers_refresh = build_controllers()
+                    with ui.tab_panel(TABS[2]).classes("w-full h-full settings-panel"):
+                        build_settings(config)
             with workspace.separator:
                 with ui.element("div").classes("log-resize-grip"):
                     ui.tooltip("Drag to resize System Log")
@@ -195,13 +199,13 @@ def build_page(controller, store, config, log_buffer: LogBuffer) -> None:
         else:
             ros = "OFF"
         for name, value in (
-            ("SYSTEM", system),
-            ("PICO", pico),
-            ("L CTRL", left_ctrl),
-            ("R CTRL", right_ctrl),
-            ("L ARM", left_arm),
-            ("R ARM", right_arm),
-            ("ROS2", ros),
+            ("System", system),
+            ("PICO Input", pico),
+            ("Left Control", left_ctrl),
+            ("Right Control", right_ctrl),
+            ("Left Arm", left_arm),
+            ("Right Arm", right_arm),
+            ("ROS 2", ros),
         ):
             chips[name].set_text(f"{name}: {value}")
             chips[name].style(f"background-color:{status_background(value)}")
@@ -241,7 +245,7 @@ def build_page(controller, store, config, log_buffer: LogBuffer) -> None:
 
         if tabs.value == TABS[0]:
             simulation_refresh(snapshot)
-        else:
+        elif tabs.value == TABS[1]:
             controllers_refresh(snapshot)
 
         if snapshot.error and snapshot.error != last_error[0]:

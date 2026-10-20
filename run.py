@@ -13,13 +13,14 @@ from pathlib import Path
 try:
     import ik_solver  # noqa: F401
 except ImportError as exc:
-    raise SystemExit("ik_solver is not built; run scripts/build_ik.ps1 or scripts/build_ik.sh") from exc
+    raise SystemExit("ik_solver is not built; run: python setup.py build_ext --inplace") from exc
 
 from config import ControlConfig
 from control_loop import ArmController
 from controller_state import SnapshotStore
 from logging_utils import LogBuffer, configure_logging
 from pose_source import DemoPoseSource, IpcPoseSource
+from settings_store import apply_settings, load_settings
 
 ROOT = Path(__file__).resolve().parent
 
@@ -129,12 +130,20 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     os.chdir(ROOT)
     config = ControlConfig()
+    settings_data, settings_error = load_settings()
+    if settings_data:
+        try:
+            config = apply_settings(config, settings_data)
+        except ValueError as exc:
+            settings_error = str(exc)
     no_pico = args.no_pico or args.demo
     vr_port = find_free_port(config.pico.ingest_host, args.vr_port or config.pico.vr_port)
     ipc_port = find_free_port(config.ipc.host, args.ipc_port or config.ipc.port)
     ui_port = find_free_port(config.gui.host, args.port or config.gui.port, config.gui.port_span)
     buffer = LogBuffer()
     logger = configure_logging(config.log, buffer)
+    if settings_error:
+        logger.warning("settings.json ignored: %s", settings_error)
     supervisor = PicoSupervisor(config, vr_port, ipc_port, buffer, logger, no_pico)
     supervisor.start()
     if args.demo:

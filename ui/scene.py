@@ -266,7 +266,7 @@ def build_scene(config: ControlConfig):
     from nicegui import ui
 
     with ui.element("div").classes("sim-viewport w-full h-full"):
-        scene = ui.scene(grid=(2, 20), background_color="#f8fafc", fps=10).classes("w-full h-full")
+        scene = ui.scene(grid=False, background_color="#f8fafc", fps=10).classes("w-full h-full")
         scene.move_camera(
             x=1.7,
             y=-2.3,
@@ -277,9 +277,9 @@ def build_scene(config: ControlConfig):
             duration=0.0,
         )
         with ui.element("div").classes("scene-legend"):
-            ui.label("LEFT").classes("legend-left")
-            ui.label("RIGHT").classes("legend-right")
-            ui.label("REAL FEEDBACK").classes("legend-real")
+            ui.label("Left Arm").classes("legend-left")
+            ui.label("Right Arm").classes("legend-right")
+            ui.label("Real Feedback").classes("legend-real")
     visual = TeleopScene(scene, config)
 
     def refresh(snapshot) -> None:

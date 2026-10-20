@@ -21,11 +21,11 @@ def _ypr(quat) -> tuple[float, float, float]:
 def build_controllers():
     cards = {}
     with ui.row().classes("w-full items-start gap-4"):
-        for side, title in (("left", "LEFT CONTROLLER"), ("right", "RIGHT CONTROLLER")):
+        for side, title in (("left", "Left Controller"), ("right", "Right Controller")):
             with ui.card().classes("flex-1 min-w-0"):
                 with ui.row().classes("w-full items-center justify-between"):
                     ui.label(title).classes("font-semibold text-sm")
-                    status = ui.label("WAITING").classes("status-chip text-xs")
+                    status = ui.label("Waiting").classes("status-chip text-xs")
                 position = ui.label("Position (m)   --").classes("mono text-xs")
                 quaternion = ui.label("Quaternion     --").classes("mono text-xs")
                 angles = ui.label("Yaw/Pitch/Roll --").classes("mono text-xs")
@@ -40,7 +40,7 @@ def build_controllers():
             status, position, quaternion, angles, buttons = cards[side]
             controller = snapshot.controllers.get(side)
             if controller is None:
-                status.set_text("WAITING")
+                status.set_text("Waiting")
                 status.style("background-color:#e2e8f0")
                 position.set_text("Position (m)   --")
                 quaternion.set_text("Quaternion     --")
@@ -48,7 +48,7 @@ def build_controllers():
                 for button in buttons:
                     button.classes(remove="key-on")
                 continue
-            status.set_text("TRACKED")
+            status.set_text("Tracked")
             status.style("background-color:#bbf7d0")
             x, y, z = controller.xyz
             qx, qy, qz, qw = controller.quat

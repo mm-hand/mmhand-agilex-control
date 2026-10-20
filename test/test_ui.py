@@ -43,7 +43,7 @@ def test_ui_strings_are_english_and_hide_removed_controls():
 
 
 def test_arm_simulation_is_first_and_default_tab():
-    assert TABS == ["Arm Simulation", "Controllers"]
+    assert TABS == ["Arm Simulation", "Controllers", "Settings"]
 
 
 def test_status_colors_cover_running_waiting_and_fault_states():
@@ -80,8 +80,14 @@ async def test_page_builds_with_english_shell_and_system_log():
         await user.should_see("Controllers")
         await user.should_see("System Log")
         await user.should_see("system log line")
-        await user.should_see("SYSTEM: TELEOP")
-        await user.should_see("ROS2 Output")
+        await user.should_see("System: TELEOP")
+        await user.should_see("Left Control")
+        await user.should_see("Right Control")
+        await user.should_see("ROS 2 Output")
+        await user.should_see("Settings")
+        await user.should_see("Startup Pose")
+        await user.should_see("Base Frames")
+        await user.should_see("Restore Defaults")
         await user.should_see("STOP")
 
 

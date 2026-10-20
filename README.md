@@ -89,40 +89,18 @@ environment. It does not create an environment.
 ### Build the IK extension
 
 The IK solver is the only compiled part of the project. Cython generates C from
-`ik_solver.pyx`, then the platform compiler builds a native extension. There is
-no separate build system to learn.
+`ik_solver.pyx`, then the platform compiler builds a native extension.
 
-Linux:
+Windows and Linux use the same commands. The only difference is the compiler
+environment:
 
-```bash
-conda activate mmhand
-python scripts/build_ik.sh
-```
-
-Windows:
-
-```powershell
-conda activate mmhand
-powershell -ExecutionPolicy Bypass -File scripts/build_ik.ps1
-```
-
-The scripts are convenience wrappers. They locate the active environment's
-Python and the Visual Studio C++ environment, then run the same command you can
-run yourself.
-
-Manual build on Linux:
+- Windows: open **x64 Native Tools Command Prompt for VS 2022** so `cl.exe` is
+  on `PATH`.
+- Linux: a working GCC toolchain.
 
 ```bash
 conda activate mmhand
-python setup.py build_ext --inplace
-```
-
-Manual build on Windows: open an **x64 Native Tools Command Prompt for VS 2022**
-so `cl.exe` is on `PATH`, then run:
-
-```bat
-conda activate mmhand
-cd C:\Users\73547\analytic_control
+cd <repository>
 python setup.py build_ext --inplace
 ```
 
@@ -135,12 +113,8 @@ ik_solver.cpython-312-*.so      # Linux
 ```
 
 The generated files are ignored by Git. Rebuild after changing `ik_solver.pyx`.
-
-If the script cannot find Cython, it prints `CONDA_PREFIX`,
-`CONDA_DEFAULT_ENV`, and the Python candidates it checked. In some Windows
-PowerShell setups `CONDA_PREFIX` points to the base installation even though the
-prompt says `(mmhand)`; the script also checks the `CONDA_DEFAULT_ENV` candidate,
-so it can still find the right environment.
+If Cython is missing, run `pip install -r requirements.txt` in the same
+environment.
 
 For real-arm use on Linux, initialize the SDK submodule:
 
@@ -196,7 +170,7 @@ Top bar:
 
 - `AgileX Nero Teleop`
 - `Connect Arms`
-- `ROS2 Output` switch
+- `ROS 2 Output` switch
 - `STOP`
 
 The status bar contains colored chips for:
@@ -211,8 +185,38 @@ Tabs:
 
 - `Arm Simulation` (first tab and default): full-width 3D view of both arms
 - `Controllers`: live pose and button state for both PICO controllers
+- `Settings`: startup pose and arm base frame overrides
 
 The bottom `System Log` is resizable. Drag the divider to change its height.
+
+## Settings
+
+`Settings` edits a runtime override file:
+
+```text
+settings.json
+```
+
+It does not rewrite `config.py`. `config.py` remains the source of default
+values. The file is ignored by Git.
+
+Editable fields:
+
+- left and right startup pose, seven joint angles in degrees
+- horizon-to-shoulder translation for each arm
+- shoulder-to-arm-base translation and RPY for each arm
+
+Buttons:
+
+- `Save`: validate and write `settings.json`
+- `Restore Defaults`: remove `settings.json` and restore the displayed defaults
+
+Settings are applied at the next `python run.py`. The page shows
+`Restart to apply.` after a save. This avoids changing arm-base coordinates
+during an active teleoperation session.
+
+If `settings.json` is missing or invalid, the application logs a warning and
+uses the `config.py` defaults.
 
 ## Operating the Arms
 
@@ -374,10 +378,11 @@ Line counts are total file lines, including blank lines and comments.
 
 ```text
 analytic_control/
-├── run.py                              174
+├── run.py                              183
 ├── config.py                           160
 ├── control_loop.py                     507
 ├── controller_state.py                  67
+├── settings_store.py                    92
 ├── ipc.py                              238
 ├── pose_source.py                      147
 ├── ros_output.py                       131
@@ -401,9 +406,10 @@ analytic_control/
 │
 ├── ui/
 │   ├── __init__.py                       0
-│   ├── app.py                          275
+│   ├── app.py                          279
 │   ├── controllers.py                   66
-│   └── scene.py                        288
+│   ├── scene.py                        288
+│   └── settings.py                      88
 │
 ├── test/
 │   ├── __init__.py                       0
@@ -414,14 +420,12 @@ analytic_control/
 │   ├── test_logging.py                  42
 │   ├── test_pico_bridge.py              47
 │   ├── test_ros_output.py               76
-│   └── test_ui.py                      129
-│
-├── scripts/
-│   ├── build_ik.ps1                     60
-│   └── build_ik.sh                      16
+│   ├── test_settings.py                 63
+│   └── test_ui.py                      135
 │
 ├── requirements.txt
 ├── pytest.ini                             4
+├── settings.json                          # generated, ignored by Git
 └── README.md
 ```
 
@@ -429,13 +433,13 @@ Source code totals, excluding this README, requirements, and pytest.ini:
 
 | Group | Files | Lines |
 |---|---:|---:|
-| Core control and kinematics | 16 | 2,991 |
+| Core control and kinematics | 17 | 3,092 |
 | PICO bridge | 4 | 341 |
-| NiceGUI | 4 | 629 |
-| Tests | 9 | 1,003 |
-| Build scripts and setup | 3 | 97 |
+| NiceGUI | 5 | 721 |
+| Tests | 10 | 1,072 |
+| Setup | 1 | 21 |
 | Hardware debug tool | 1 | 21 |
-| **Total** | **37** | **5,082** |
+| **Total** | **38** | **5,268** |
 
 `nero_urdf/meshes/*.stl` are runtime assets, not code. `apk/`, `build/`,
 generated `.pyd`/`.c` files, and `logs/` are excluded from the code count.
@@ -468,11 +472,12 @@ Coverage includes:
 
 ## Troubleshooting
 
-- `ik_solver` import fails: build it with `scripts/build_ik.ps1` or
-  `scripts/build_ik.sh`.
+- `ik_solver` import fails: build it with
+  `python setup.py build_ext --inplace`.
 - `ModuleNotFoundError: No module named 'Cython'`: activate the existing
-  environment and run `pip install -r requirements.txt`, then build again. The
-  build scripts report the Python executable they are using.
+  environment and run `pip install -r requirements.txt`, then build again.
+- Windows build cannot find `cl.exe`: use an x64 Native Tools Command Prompt for
+  VS 2022.
 - PICO not found: check `adb devices`, USB debugging, and the APK package. The
   bridge retries ADB automatically.
 - Real arm connection fails: verify the SocketCAN channel and bitrate.
