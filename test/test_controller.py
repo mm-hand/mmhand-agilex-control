@@ -95,53 +95,63 @@ def test_pure_simulation_enters_teleop():
         assert not arms
 
 
-def test_connect_left_then_confirm_routes_only_left():
+def test_connect_latches_stop_without_motion():
     with _controller() as (controller, store, arms):
         _wait(lambda: store.read().phase == "TELEOP")
         controller.submit(ControlCommand("CONNECT", side="left", channel="can0"))
-        _wait(lambda: store.read().phase == "HANDOFF")
-        assert store.read().handoff_sides == ("left",)
+        _wait(lambda: store.read().phase == "STOPPED")
+        assert store.read().arm_status["left"].state == "STOPPED"
         assert not arms["left"].moves
-        controller.submit(ControlCommand("CONFIRM", request_id=store.read().handoff_id))
+
+
+def test_connect_second_arm_while_stopped():
+    with _controller() as (controller, store, arms):
         _wait(lambda: store.read().phase == "TELEOP")
-        assert arms["left"].moves
-        assert arms["left"].holds
-        _wait(lambda: bool(arms["left"].sent))
+        controller.submit(ControlCommand("CONNECT", side="left", channel="can0"))
+        _wait(lambda: store.read().phase == "STOPPED")
+        controller.submit(ControlCommand("CONNECT", side="right", channel="can1"))
+        _wait(lambda: store.read().arm_status["right"].state == "STOPPED")
+        assert store.read().phase == "STOPPED"
+        assert set(arms) == {"left", "right"}
+
+
+def test_start_returns_simulation_and_arm_to_startup():
+    with _controller() as (controller, store, arms):
+        _wait(lambda: store.read().phase == "TELEOP")
+        controller.submit(ControlCommand("CONNECT", side="left", channel="can0"))
+        _wait(lambda: store.read().phase == "STOPPED")
+        controller.submit(ControlCommand("RESET"))
+        _wait(lambda: store.read().phase == "TELEOP")
+        assert len(arms["left"].moves) == 1
+        assert np.allclose(arms["left"].moves[0], np.asarray(ControlConfig().startup.left_pose_rad))
+        assert store.read().arm_status["left"].state == "TELEOP"
+
+
+def test_start_moves_both_arms():
+    with _controller() as (controller, store, arms):
+        _wait(lambda: store.read().phase == "TELEOP")
+        controller.submit(ControlCommand("CONNECT", side="left", channel="can0"))
+        _wait(lambda: store.read().phase == "STOPPED")
+        controller.submit(ControlCommand("CONNECT", side="right", channel="can1"))
+        _wait(lambda: store.read().arm_status["right"].state == "STOPPED")
+        controller.submit(ControlCommand("RESET"))
+        _wait(lambda: store.read().phase == "TELEOP")
+        assert len(arms["left"].moves) == 1
+        assert len(arms["right"].moves) == 1
+        assert store.read().arm_status["left"].state == "TELEOP"
+        assert store.read().arm_status["right"].state == "TELEOP"
+        _wait(lambda: bool(arms["left"].sent) and bool(arms["right"].sent))
         left_q, right_q = arms["left"].sent[-1]
         assert left_q is not None and right_q is None
-
-
-def test_cancel_disconnects_without_motion():
-    with _controller() as (controller, store, arms):
-        _wait(lambda: store.read().phase == "TELEOP")
-        controller.submit(ControlCommand("CONNECT", side="left", channel="can0"))
-        _wait(lambda: store.read().phase == "HANDOFF")
-        controller.submit(ControlCommand("CANCEL", request_id=store.read().handoff_id))
-        _wait(lambda: store.read().phase == "TELEOP")
-        _wait(lambda: arms["left"].closed)
-        assert not arms["left"].moves
-
-
-def test_both_arms_align_and_receive_commands():
-    with _controller() as (controller, store, arms):
-        _wait(lambda: store.read().phase == "TELEOP")
-        controller.submit(ControlCommand("CONNECT", side="left", channel="can0"))
-        _wait(lambda: store.read().phase == "HANDOFF")
-        controller.submit(ControlCommand("CONNECT", side="right", channel="can1"))
-        _wait(lambda: len(store.read().handoff_sides) == 2)
-        controller.submit(ControlCommand("CONFIRM", request_id=store.read().handoff_id))
-        _wait(lambda: store.read().phase == "TELEOP")
-        assert arms["left"].moves and arms["right"].moves
-        _wait(lambda: bool(arms["left"].sent) and bool(arms["right"].sent))
-        assert arms["left"].sent[-1][0] is not None
-        assert arms["right"].sent[-1][1] is not None
+        left_q, right_q = arms["right"].sent[-1]
+        assert left_q is None and right_q is not None
 
 
 def test_duplicate_channel_is_rejected():
     with _controller() as (controller, store, arms):
         _wait(lambda: store.read().phase == "TELEOP")
         controller.submit(ControlCommand("CONNECT", side="left", channel="can0"))
-        _wait(lambda: store.read().phase == "HANDOFF")
+        _wait(lambda: store.read().phase == "STOPPED")
         controller.submit(ControlCommand("CONNECT", side="right", channel="can0"))
         _wait(lambda: store.read().arm_status["right"].state == "ERROR")
         assert "channel" in (store.read().arm_status["right"].error or "")
@@ -151,8 +161,8 @@ def test_stop_holds_simulation_and_following_arm():
     with _controller() as (controller, store, arms):
         _wait(lambda: store.read().phase == "TELEOP")
         controller.submit(ControlCommand("CONNECT", side="left", channel="can0"))
-        _wait(lambda: store.read().phase == "HANDOFF")
-        controller.submit(ControlCommand("CONFIRM", request_id=store.read().handoff_id))
+        _wait(lambda: store.read().phase == "STOPPED")
+        controller.submit(ControlCommand("RESET"))
         _wait(lambda: store.read().phase == "TELEOP")
         _wait(lambda: bool(arms["left"].sent))
         controller.submit(ControlCommand("STOP"))
@@ -164,7 +174,7 @@ def test_stop_holds_simulation_and_following_arm():
         assert len(arms["left"].sent) > sent_before
 
 
-def test_reset_stop_returns_simulation_to_teleop():
+def test_start_without_connected_arm_returns_to_teleop():
     with _controller() as (controller, store, _arms):
         _wait(lambda: store.read().phase == "TELEOP")
         controller.submit(ControlCommand("STOP"))
@@ -172,22 +182,3 @@ def test_reset_stop_returns_simulation_to_teleop():
         _wait(lambda: store.read().can_reset)
         controller.submit(ControlCommand("RESET"))
         _wait(lambda: store.read().phase == "TELEOP")
-
-
-def test_reset_stop_requires_handoff_for_connected_arm():
-    with _controller() as (controller, store, arms):
-        _wait(lambda: store.read().phase == "TELEOP")
-        controller.submit(ControlCommand("CONNECT", side="left", channel="can0"))
-        _wait(lambda: store.read().phase == "HANDOFF")
-        controller.submit(ControlCommand("CONFIRM", request_id=store.read().handoff_id))
-        _wait(lambda: store.read().phase == "TELEOP")
-        controller.submit(ControlCommand("STOP"))
-        _wait(lambda: store.read().phase == "STOPPED")
-        _wait(lambda: store.read().can_reset)
-        controller.submit(ControlCommand("RESET"))
-        _wait(lambda: store.read().phase == "HANDOFF")
-        assert store.read().handoff_sides == ("left",)
-        assert len(arms["left"].moves) == 1
-        controller.submit(ControlCommand("CONFIRM", request_id=store.read().handoff_id))
-        _wait(lambda: store.read().phase == "TELEOP")
-        assert len(arms["left"].moves) == 2

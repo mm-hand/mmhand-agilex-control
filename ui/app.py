@@ -4,6 +4,7 @@ import sys
 
 from nicegui import app, ui
 
+from config import default_can_channels
 from controller_state import ControlCommand
 from logging_utils import LogBuffer
 from ui.controllers import build_controllers
@@ -11,7 +12,8 @@ from ui.scene import MESH_DIR, build_scene
 from ui.settings import build_settings
 
 TABS = ["Arm Simulation", "Controllers", "Settings"]
-DEFAULT_CHANNELS = {"left": "can0", "right": "can1"}
+DEFAULT_CHANNELS = dict(zip(("left", "right"), default_can_channels()))
+REAL_ARM_SUPPORTED = sys.platform.startswith(("win32", "linux"))
 
 CSS = """
 body {background:#F5F7FA;color:#1e293b}
@@ -55,7 +57,7 @@ def status_background(value: str) -> str:
         return "#bbf7d0"
     if state in ("STARTUP", "ALIGNING", "CONNECTING"):
         return "#bfdbfe"
-    if state in ("HANDOFF", "WAITING"):
+    if state in ("WAITING",):
         return "#fde68a"
     if state in ("STOPPED", "FAULT", "ERROR", "UNAVAILABLE"):
         return "#fecaca"
@@ -75,7 +77,6 @@ def build_page(controller, store, config, log_buffer: LogBuffer) -> None:
     ui.colors(primary="#2563eb", positive="#16a34a", warning="#ea880c", negative="#dc2626")
     ui.add_css(CSS)
     log_sequence = [0]
-    shown_handoff = [0]
     last_error = [None]
     ros_syncing = [False]
 
@@ -90,13 +91,13 @@ def build_page(controller, store, config, log_buffer: LogBuffer) -> None:
                 button = ui.button("Connect").props("dense outline")
             rows[side] = (state, channel, button)
         ui.button("Close", on_click=connect_dialog.close).props("flat")
-        if not sys.platform.startswith("linux"):
-            ui.label("Real arm connection requires Linux SocketCAN.").classes("text-xs text-red-600")
+        if not REAL_ARM_SUPPORTED:
+            ui.label("Real arm connection requires Windows (agx_cando) or Linux (SocketCAN).").classes("text-xs text-red-600")
 
     def connect_click(side: str) -> None:
         snapshot = store.read()
         state = snapshot.arm_status[side].state
-        if state in ("READY", "TELEOP"):
+        if state in ("READY", "TELEOP", "STOPPED"):
             controller.submit(ControlCommand("DISCONNECT", side=side))
         else:
             controller.submit(ControlCommand("CONNECT", side=side, channel=rows[side][1].value or DEFAULT_CHANNELS[side]))
@@ -104,47 +105,41 @@ def build_page(controller, store, config, log_buffer: LogBuffer) -> None:
     for side in rows:
         rows[side][2].on("click", lambda _=None, side=side: connect_click(side))
 
-    with ui.dialog().props("persistent") as handoff_dialog, ui.card().classes("w-[560px] max-w-full"):
-        ui.label("Real Arm Handoff").classes("font-semibold text-lg")
+    start_requires_verification = [False]
+
+    with ui.dialog().props("persistent") as start_dialog, ui.card().classes("w-[560px] max-w-full"):
+        ui.label("Start").classes("font-semibold text-lg")
         ui.label(
-            "Simulation reached the initial pose. Verify that each simulated arm base matches its real arm base in the real world."
+            "STOP is latched. Start returns the simulation and every connected real arm to the startup pose."
         ).classes("text-sm whitespace-pre-wrap")
-        handoff_sides = ui.label("").classes("text-sm font-semibold")
-        verification = ui.checkbox("I have verified the simulated and real arm bases match.")
+        start_verification = ui.checkbox("I have verified the simulated and real arm bases match.")
+        start_verification.set_visibility(False)
         with ui.row().classes("w-full justify-end"):
-            cancel = ui.button("Cancel").props("flat")
-            confirm = ui.button("Confirm and Move").props("unelevated")
-        confirm.set_enabled(False)
-        verification.on_value_change(lambda event: confirm.set_enabled(bool(event.value)))
-        handoff_request = [0]
+            start_cancel = ui.button("Cancel").props("flat")
+            start_confirm = ui.button("Start").props("unelevated")
 
-        def confirm_handoff() -> None:
-            controller.submit(ControlCommand("CONFIRM", request_id=handoff_request[0]))
-            handoff_dialog.close()
+        def update_start_confirm() -> None:
+            start_confirm.set_enabled(not start_requires_verification[0] or bool(start_verification.value))
 
-        def cancel_handoff() -> None:
-            controller.submit(ControlCommand("CANCEL", request_id=handoff_request[0]))
-            handoff_dialog.close()
+        def open_start_dialog() -> None:
+            snapshot = store.read()
+            connected = any(
+                snapshot.arm_status[side].state in ("READY", "STOPPED", "TELEOP", "ALIGNING")
+                for side in ("left", "right")
+            )
+            start_requires_verification[0] = connected
+            start_verification.set_visibility(connected)
+            start_verification.set_value(False)
+            update_start_confirm()
+            start_dialog.open()
 
-        confirm.on("click", lambda _=None: confirm_handoff())
-        cancel.on("click", lambda _=None: cancel_handoff())
-
-    with ui.dialog().props("persistent") as reset_dialog, ui.card().classes("w-[560px] max-w-full"):
-        ui.label("Reset STOP").classes("font-semibold text-lg")
-        ui.label(
-            "STOP is latched. Reset returns the simulation to the startup pose. "
-            "Connected real arms stay held and must be confirmed through Real Arm Handoff before they move."
-        ).classes("text-sm whitespace-pre-wrap")
-        with ui.row().classes("w-full justify-end"):
-            reset_cancel = ui.button("Cancel").props("flat")
-            reset_confirm = ui.button("Reset").props("unelevated")
-
-        def confirm_reset() -> None:
+        def confirm_start() -> None:
             controller.submit(ControlCommand("RESET"))
-            reset_dialog.close()
+            start_dialog.close()
 
-        reset_cancel.on("click", lambda _=None: reset_dialog.close())
-        reset_confirm.on("click", lambda _=None: confirm_reset())
+        start_verification.on_value_change(lambda _=None: update_start_confirm())
+        start_cancel.on("click", lambda _=None: start_dialog.close())
+        start_confirm.on("click", lambda _=None: confirm_start())
 
     with ui.element("div").classes("console-shell"):
         with ui.row().classes("connection-bar w-full"):
@@ -153,10 +148,10 @@ def build_page(controller, store, config, log_buffer: LogBuffer) -> None:
             connect_button.on("click", lambda _=None: connect_dialog.open())
             ui.space()
             ros_switch = ui.switch("ROS 2 Output")
-            reset_button = ui.button("Reset").props("outline")
-            reset_button.set_visibility(False)
-            with reset_button:
-                ui.tooltip("Reset is available after the current hardware operation finishes.")
+            start_button = ui.button("Start").props("outline").mark("start-top")
+            start_button.set_visibility(False)
+            with start_button:
+                ui.tooltip("Start returns the simulation and connected arms to the startup pose after STOP.")
             stop_button = ui.button("STOP").classes("stop-button").props("unelevated")
 
         with ui.row().classes("status-bar w-full"):
@@ -198,7 +193,7 @@ def build_page(controller, store, config, log_buffer: LogBuffer) -> None:
         controller.submit(ControlCommand("STOP"))
 
     stop_button.on("click", lambda _=None: stop_click())
-    reset_button.on("click", lambda _=None: reset_dialog.open())
+    start_button.on("click", lambda _=None: open_start_dialog())
 
     def ros_changed(event) -> None:
         if ros_syncing[0]:
@@ -233,40 +228,33 @@ def build_page(controller, store, config, log_buffer: LogBuffer) -> None:
             chips[name].set_text(f"{name}: {value}")
             chips[name].style(f"background-color:{status_background(value)}")
 
-        locked = system in ("STOPPED", "FAULT")
-        connect_button.set_enabled(not locked)
-        stop_button.set_enabled(not locked)
-        reset_button.set_visibility(system == "STOPPED")
-        reset_button.set_enabled(bool(snapshot.can_reset))
+        stopped = system == "STOPPED"
+        fault = system == "FAULT"
+        aligning = system == "ALIGNING"
+        connect_button.set_enabled(not fault and not aligning)
+        stop_button.set_visibility(not stopped)
+        stop_button.set_enabled(not fault)
+        start_button.set_visibility(stopped)
+        start_button.set_enabled(bool(snapshot.can_reset))
         ros_syncing[0] = True
         ros_switch.set_value(bool(snapshot.ros.get("enabled")))
-        ros_switch.set_enabled(not locked and snapshot.ros.get("available") is not False)
+        ros_switch.set_enabled(not fault and snapshot.ros.get("available") is not False)
         ros_syncing[0] = False
 
         for side, (state_label, channel, button) in rows.items():
             status = snapshot.arm_status[side]
             state_label.set_text(status.state)
             state_label.style(f"background-color:{status_background(status.state)}")
-            connected = status.state in ("READY", "TELEOP")
+            connected = status.state in ("READY", "TELEOP", "STOPPED")
             busy = status.state in ("CONNECTING", "ALIGNING")
             button.set_text("Disconnect" if connected else "Connect")
             button.set_enabled(
-                sys.platform.startswith("linux")
-                and not locked
+                REAL_ARM_SUPPORTED
+                and not fault
                 and not busy
-                and system != "ALIGNING"
+                and not aligning
             )
             channel.set_enabled(not connected and not busy)
-
-        if system == "HANDOFF" and snapshot.handoff_id != shown_handoff[0] and snapshot.handoff_sides:
-            shown_handoff[0] = snapshot.handoff_id
-            handoff_request[0] = snapshot.handoff_id
-            handoff_sides.set_text("Connected arms: " + ", ".join(side.upper() for side in snapshot.handoff_sides))
-            verification.set_value(False)
-            confirm.set_enabled(False)
-            handoff_dialog.open()
-        elif system != "HANDOFF" and handoff_dialog.value:
-            handoff_dialog.close()
 
         if tabs.value == TABS[0]:
             simulation_refresh(snapshot)

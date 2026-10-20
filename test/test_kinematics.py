@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import numpy as np
 
-from config import IkConfig, MotionConfig
+from config import ControlConfig, IkConfig, MotionConfig
 from ik import NeroIK, _T_LINK7_TO_FLANGE
 from ik_solver import ContinuityRuntimeState, NeroParams, fk, solve_pose_continuous_with_state
-from motion import ArmMotionPlanner, clip_to_joint_limits, plan_joint_trajectory
+from motion import ArmMotionPlanner, clip_to_joint_limits, joint_trajectory, plan_joint_trajectory
 from ui.scene import UrdfModel, link_frames
 
 
@@ -25,7 +25,6 @@ def _cfg() -> MotionConfig:
         max_joint_step_rad=0.02,
         max_velocity_rad_s=(0.8,) * 7,
         max_acceleration_rad_s2=(2.0,) * 7,
-        min_trajectory_duration_s=0.2,
         max_trajectory_duration_s=1.0,
     )
 
@@ -129,3 +128,22 @@ def test_urdf_visual_meshes_exist():
     for link in model.links.values():
         if link.mesh is not None:
             assert link.mesh.is_file()
+
+
+def test_joint_trajectory_reaches_far_pose():
+    motion = MotionConfig()
+    target = np.asarray(ControlConfig().startup.right_pose_rad, dtype=float)
+    q_start = np.array([-1.29, -0.36, -1.43, 0.07, 0.31, -0.59, -1.33])
+    points = joint_trajectory(motion, q_start, target)
+    assert np.allclose(points[-1], clip_to_joint_limits(target, motion), atol=1e-6)
+
+
+def test_joint_trajectory_does_not_wrap_across_joint_limits():
+    motion = MotionConfig()
+    target = np.asarray(ControlConfig().startup.right_pose_rad, dtype=float)
+    q_start = clip_to_joint_limits(target, motion)
+    q_start[4] = 2.70
+    points = joint_trajectory(motion, q_start, target)
+    clipped = clip_to_joint_limits(target, motion)
+    assert points[-1][4] < 0.0
+    assert abs(points[-1][4] - clipped[4]) < 1e-6

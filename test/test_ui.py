@@ -5,8 +5,9 @@ import asyncio
 from pathlib import Path
 
 from config import ControlConfig
-from controller_state import ControlSnapshot, SnapshotStore
+from controller_state import ArmStatus, ControlSnapshot, SnapshotStore
 from logging_utils import LogBuffer
+from nicegui import ui
 from ui.app import TABS, _pico_state, build_page, status_background
 from ui.scene import CAMERA_FOV, CAMERA_POSITION
 
@@ -98,7 +99,7 @@ async def test_page_builds_with_english_shell_and_system_log():
         await user.should_see("STOP")
 
 
-async def test_reset_stop_button_is_visible_after_stop():
+async def test_start_button_replaces_stop_after_stop():
     from nicegui.testing.user_simulation import user_simulation
 
     store = SnapshotStore()
@@ -111,7 +112,33 @@ async def test_reset_stop_button_is_visible_after_stop():
     ) as user:
         await user.open("/")
         await asyncio.sleep(0.2)
-        await user.should_see("Reset")
+        await user.should_see("Start")
+        await user.should_not_see(kind=ui.button, content="STOP")
+
+
+async def test_start_dialog_requires_verification_for_connected_arm():
+    from nicegui.testing.user_simulation import user_simulation
+
+    store = SnapshotStore()
+    store.publish(
+        ControlSnapshot(
+            phase="STOPPED",
+            can_reset=True,
+            arm_status={"left": ArmStatus(state="STOPPED"), "right": ArmStatus()},
+        )
+    )
+    config = ControlConfig()
+    buffer = LogBuffer()
+
+    async with user_simulation(
+        root=lambda: build_page(FakeController(), store, config, buffer)
+    ) as user:
+        await user.open("/")
+        await asyncio.sleep(0.2)
+        user.find(marker="start-top").click()
+        await asyncio.sleep(0.2)
+        await user.should_see("I have verified the simulated and real arm bases match.")
+        await user.should_see("Start returns the simulation and every connected real arm to the startup pose.")
 
 
 async def test_real_feedback_creates_ghost_arm():
@@ -132,27 +159,3 @@ async def test_real_feedback_creates_ghost_arm():
             )
         )
         await asyncio.sleep(0.3)
-
-
-async def test_handoff_dialog_opens_for_connected_arms():
-    from nicegui.testing.user_simulation import user_simulation
-
-    store = SnapshotStore()
-    config = ControlConfig()
-    buffer = LogBuffer()
-
-    async with user_simulation(
-        root=lambda: build_page(FakeController(), store, config, buffer)
-    ) as user:
-        await user.open("/")
-        store.publish(
-            ControlSnapshot(
-                phase="HANDOFF",
-                handoff_id=1,
-                handoff_sides=("left",),
-            )
-        )
-        await asyncio.sleep(0.3)
-        await user.should_see("Real Arm Handoff")
-        await user.should_see("Connected arms: LEFT")
-        await user.should_see("I have verified the simulated and real arm bases match.")

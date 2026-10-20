@@ -50,6 +50,19 @@ def adb_setup(config: PicoConfig) -> None:
     )
 
 
+def adb_reverse_active(config: PicoConfig) -> bool:
+    """True when the headset ingest tunnel is currently registered."""
+    adb = find_adb(config)
+    result = subprocess.run(
+        [adb, "reverse", "--list"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=5.0,
+    )
+    return f"tcp:{config.device_port}" in (result.stdout or "")
+
+
 def adb_remove_reverse(config: PicoConfig) -> None:
     try:
         adb = find_adb(config)
@@ -62,6 +75,44 @@ def adb_remove_reverse(config: PicoConfig) -> None:
         )
     except (OSError, RuntimeError, subprocess.SubprocessError):
         pass
+
+
+def focus_lines(text: str) -> list[str]:
+    return [line for line in text.splitlines() if "mCurrentFocus=" in line or "mFocusedApp=" in line]
+
+
+def hand_dialog_focused(text: str) -> bool:
+    return any("HandDialogActivity" in line for line in focus_lines(text))
+
+
+def read_focus(config: PicoConfig) -> str:
+    adb = find_adb(config)
+    result = subprocess.run(
+        [adb, "shell", "dumpsys window | grep -E 'mCurrentFocus|mFocusedApp'"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5.0,
+    )
+    return result.stdout or ""
+
+
+def restore_focus(config: PicoConfig) -> None:
+    adb = find_adb(config)
+    subprocess.run(
+        [adb, "shell", "input", "keyevent", "KEYCODE_BACK"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=5.0,
+    )
+    subprocess.run(
+        [adb, "shell", "am", "start", "-n", f"{config.package}/.MainActivity"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=5.0,
+    )
 
 
 class PicoBridge:
@@ -87,6 +138,7 @@ class PicoBridge:
         self._tasks = [
             asyncio.create_task(self._adb_loop(), name="adb-loop"),
             asyncio.create_task(self._stats_loop(), name="stats-loop"),
+            asyncio.create_task(self._focus_loop(), name="focus-loop"),
         ]
         self.logger.info("pico bridge ready: vr=%s ipc=%s", self.config.vr_port, self.config.ipc_port)
         await self._stop.wait()
@@ -136,17 +188,23 @@ class PicoBridge:
             self._adb_error = "adb disabled"
             return
         while not self._stop.is_set():
-            if not self._adb_ready:
-                try:
+            try:
+                if self._adb_ready and await asyncio.to_thread(adb_reverse_active, self.config):
+                    pass
+                else:
+                    if self._adb_ready:
+                        self.logger.warning("ADB reverse lost; reconnecting")
+                        self._adb_ready = False
                     await asyncio.to_thread(adb_setup, self.config)
                     self._adb_ready = True
                     self._adb_error = None
                     self.logger.info("ADB reverse ready: device %s -> PC %s", self.config.device_port, self.config.vr_port)
-                except Exception as exc:
-                    message = str(exc)
-                    if message != self._adb_error:
-                        self.logger.warning("ADB setup failed: %s", message)
-                    self._adb_error = message
+            except Exception as exc:
+                message = str(exc)
+                if message != self._adb_error:
+                    self.logger.warning("ADB setup failed: %s", message)
+                self._adb_error = message
+                self._adb_ready = False
             await asyncio.sleep(self.config.adb_retry_s)
 
     async def _stats_loop(self) -> None:
@@ -160,6 +218,31 @@ class PicoBridge:
             self._rate_started = now
             if self._ipc is not None:
                 await self._ipc.send(self._status())
+
+    async def _focus_loop(self) -> None:
+        if not self.config.focus_guard:
+            return
+        last_error: str | None = None
+        last_restore = 0.0
+        while not self._stop.is_set():
+            await asyncio.sleep(self.config.focus_guard_interval_s)
+            try:
+                text = await asyncio.to_thread(read_focus, self.config)
+                if not hand_dialog_focused(text):
+                    last_error = None
+                    continue
+                now = time.monotonic()
+                if now - last_restore < 5.0:
+                    continue
+                last_restore = now
+                self.logger.warning("PICO hand dialog stole focus; restoring")
+                await asyncio.to_thread(restore_focus, self.config)
+                last_error = None
+            except Exception as exc:
+                message = str(exc)
+                if message != last_error:
+                    self.logger.warning("focus guard failed: %s", message)
+                    last_error = message
 
     def _status(self) -> dict:
         if self.no_adb:

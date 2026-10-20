@@ -39,8 +39,6 @@ class ControlSnapshot:
         default_factory=lambda: {side: ArmStatus() for side in SIDES}
     )
     ros: dict = field(default_factory=dict)
-    handoff_id: int = 0
-    handoff_sides: tuple[str, ...] = ()
     error: str | None = None
     can_reset: bool = False
 
@@ -51,7 +49,6 @@ class ControlCommand:
     side: str = ""
     channel: str = ""
     enabled: bool = False
-    request_id: int = 0
 
 
 class SnapshotStore:

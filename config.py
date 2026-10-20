@@ -1,6 +1,17 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
+
+
+def default_can_interface() -> str:
+    """CAN backend used by the Nero SDK on this platform."""
+    return "agx_cando" if os.name == "nt" else "socketcan"
+
+
+def default_can_channels() -> tuple[str, str]:
+    """Default (left, right) channels: adapter indices on Windows, canX elsewhere."""
+    return ("0", "1") if os.name == "nt" else ("can0", "can1")
 
 
 @dataclass(frozen=True)
@@ -20,6 +31,8 @@ class PicoConfig:
     adb_path: str = ""
     adb_retry_s: float = 3.0
     status_hz: float = 2.0
+    focus_guard: bool = True
+    focus_guard_interval_s: float = 2.0
 
 
 @dataclass(frozen=True)
@@ -113,8 +126,7 @@ class MotionConfig:
     max_joint_step_rad: float = 0.02
     max_velocity_rad_s: tuple[float, ...] = (0.8, 0.8, 1.0, 1.0, 1.2, 1.2, 1.2)
     max_acceleration_rad_s2: tuple[float, ...] = (2.0, 2.0, 2.5, 2.5, 3.0, 3.0, 3.0)
-    min_trajectory_duration_s: float = 0.2
-    max_trajectory_duration_s: float = 4.0
+    max_trajectory_duration_s: float = 20.0
     joint_limit_margin_rad: float = 0.035
 
 
@@ -133,6 +145,11 @@ class RealArmConfig:
     servo_handoff_s: float = 0.2
     feedback_stale_s: float = 0.25
     sdk_joint_limits_enabled: bool = False
+
+    @classmethod
+    def for_platform(cls) -> "RealArmConfig":
+        """Real-arm settings for this host: SocketCAN on Linux, agx_cando on Windows."""
+        return cls(interface=default_can_interface(), channel=default_can_channels()[0])
 
 
 @dataclass(frozen=True)
@@ -156,5 +173,5 @@ class ControlConfig:
     filters: FilterConfig = field(default_factory=FilterConfig)
     startup: StartupConfig = field(default_factory=StartupConfig)
     motion: MotionConfig = field(default_factory=MotionConfig)
-    real: RealArmConfig = field(default_factory=RealArmConfig)
+    real: RealArmConfig = field(default_factory=RealArmConfig.for_platform)
     log: LogConfig = field(default_factory=LogConfig)

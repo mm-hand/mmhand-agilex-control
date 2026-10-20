@@ -56,11 +56,12 @@ block the UI or the controller.
 ## Requirements
 
 - Python 3.12 recommended
-- Linux for real Nero arms with SocketCAN
+- Linux or Windows for real Nero arms
+  - Linux uses SocketCAN, Windows uses the AgileX `agx_cando` adapter
 - Windows or Linux for simulation, GUI, and PICO bridge
 - PICO 4 Ultra with the supplied APK installed
 - USB debugging enabled and authorized
-- `adb` available in `PATH` or configured in `PicoConfig.adb_path`
+- `adb` from Android Platform-Tools (see [Install adb](#install-adb))
 - Cython and a C/C++ compiler
   - Visual Studio Build Tools with the C++ workload on Windows
   - a C compiler such as GCC on Linux
@@ -116,14 +117,34 @@ The generated files are ignored by Git. Rebuild after changing `ik_solver.pyx`.
 If Cython is missing, run `pip install -r requirements.txt` in the same
 environment.
 
-For real-arm use on Linux, initialize the SDK submodule:
+For real-arm use, initialize the SDK submodule:
 
 ```bash
 git submodule update --init --recursive
 ```
 
-Windows supports simulation, GUI, IPC, and ROS 2 output. Real Nero arms require
-Linux SocketCAN.
+Real arms run on both platforms: SocketCAN (`can0`, `can1`, ...) on Linux and
+the AgileX `agx_cando` adapter (`0`, `1`, ...) on Windows. `RealArmConfig`
+selects the backend and channel from the platform, and the `Connect Arms` rows
+pre-fill them; override the channel there if the wiring differs. On Windows the
+vendor `python-can-agx-cando` plugin (a `python-can` backend wrapping
+`cando.dll`) must also be installed; it is not on PyPI and ships with the
+AgileX CAN adapter package.
+
+### Install adb
+
+`pip install` does not provide adb; install Android Platform-Tools once.
+
+- Windows: unzip `platform-tools-latest-windows.zip` into
+  `%LOCALAPPDATA%\Android\Sdk\platform-tools` (or add its folder to `PATH`).
+- Linux: `sudo apt install android-tools-adb`.
+
+Verify with `adb devices`; the headset must appear as `device` (accept the USB
+debugging prompt in the headset if it shows `unauthorized`).
+
+If adb is already installed elsewhere, set `PicoConfig.adb_path` in `config.py`.
+Lookup order: `adb_path`, `%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe`,
+`PATH`, `~/Android/Sdk/platform-tools`.
 
 ### PICO APK
 
@@ -171,7 +192,7 @@ Top bar:
 - `AgileX Nero Teleop`
 - `Connect Arms`
 - `ROS 2 Output` switch
-- `STOP`
+- `STOP` while running; after STOP it is replaced by `Start`
 
 The status bar contains colored chips for:
 
@@ -234,34 +255,25 @@ channel and `Connect` / `Disconnect` button.
 
 Left and right must use different CAN channels.
 
-### Handoff
+A successful connection latches STOP: the simulation and every connected arm
+hold until you press `Start`.
 
-After connecting real arms, the simulation moves to the configured startup pose.
-A `Real Arm Handoff` dialog then asks the operator to verify that each simulated
-arm base matches its real arm base. `Confirm and Move` is disabled until the
-verification checkbox is selected.
-
-Confirming moves every connected real arm to the startup pose and enters servo
-teleoperation. Cancelling sends no motion and disconnects the real arms.
-
-If a new arm connects during teleoperation, the simulation returns to the
-startup pose, the following arms hold, and the handoff dialog is shown again for
-all connected arms.
-
-### STOP and Reset
+### STOP and Start
 
 `STOP` is a latched emergency stop. It stops new targets, keeps all connected
-arms at their current joint positions, and disables further control.
+arms at their current joint positions, and disables further control. After STOP,
+the `STOP` button is replaced by `Start`.
 
-After the hardware operation finishes, a `Reset` button appears. Resetting:
+`Start` asks for confirmation and then:
 
-- clears the STOP latch
 - returns the simulation to the startup pose
-- keeps connected real arms held
-- requires a new `Real Arm Handoff` confirmation before real arms move again
+- moves every connected real arm to the startup pose, enters servo hold, and
+  resumes teleoperation
+- when real arms are connected, requires the operator to confirm that each
+  simulated arm base matches its real arm base before anything moves
 
-For pure simulation, reset returns directly to teleoperation after the startup
-pose. A `FAULT` is not cleared by reset; restart the process after a fault.
+For pure simulation, `Start` returns directly to teleoperation after the startup
+pose. A `FAULT` is not cleared by `Start`; restart the process after a fault.
 
 ### Logging
 
@@ -384,7 +396,7 @@ The controller applies:
 
 Both sides always maintain a simulated joint state. A connected side also sends
 the same target to its real arm. When no PICO pose is available, that side holds
-its current target. During handoff, real arms move to the startup pose, enter
+its current target. After `Start`, real arms move to the startup pose, enter
 servo hold, and then follow the teleoperation targets.
 
 ## Code Structure and Line Counts
@@ -394,9 +406,9 @@ Line counts are total file lines, including blank lines and comments.
 ```text
 analytic_control/
 ├── run.py                              183
-├── config.py                           160
-├── control_loop.py                     529
-├── controller_state.py                  68
+├── config.py                           177
+├── control_loop.py                     491
+├── controller_state.py                  65
 ├── settings_store.py                    92
 ├── ipc.py                              238
 ├── pose_source.py                      147
@@ -406,7 +418,7 @@ analytic_control/
 ├── ik_solver.pyx                       605
 ├── filters.py                          149
 ├── frames.py                            85
-├── motion.py                            81
+├── motion.py                            90
 ├── transforms.py                        67
 ├── joint_feedback.py                    30
 ├── logging_utils.py                     73
@@ -416,27 +428,27 @@ analytic_control/
 ├── pico_bridge/
 │   ├── __init__.py                       0
 │   ├── __main__.py                      65
-│   ├── bridge.py                       191
+│   ├── bridge.py                       274
 │   └── ros_output.py                    85
 │
 ├── ui/
 │   ├── __init__.py                       0
-│   ├── app.py                          304
+│   ├── app.py                          292
 │   ├── controllers.py                   66
 │   ├── scene.py                        300
 │   └── settings.py                      88
 │
 ├── test/
 │   ├── __init__.py                       0
-│   ├── test_controller.py              193
+│   ├── test_controller.py              184
 │   ├── test_hardware.py                349
 │   ├── test_ipc.py                      65
-│   ├── test_kinematics.py              131
+│   ├── test_kinematics.py              149
 │   ├── test_logging.py                  42
-│   ├── test_pico_bridge.py              47
+│   ├── test_pico_bridge.py              92
 │   ├── test_ros_output.py               76
 │   ├── test_settings.py                 63
-│   └── test_ui.py                      158
+│   └── test_ui.py                      161
 │
 ├── requirements.txt
 ├── pytest.ini                             4
@@ -448,13 +460,13 @@ Source code totals, excluding this README, requirements, and pytest.ini:
 
 | Group | Files | Lines |
 |---|---:|---:|
-| Core control and kinematics | 17 | 3,115 |
-| PICO bridge | 4 | 341 |
-| NiceGUI | 5 | 758 |
-| Tests | 10 | 1,124 |
+| Core control and kinematics | 17 | 3,100 |
+| PICO bridge | 4 | 424 |
+| NiceGUI | 5 | 746 |
+| Tests | 10 | 1,181 |
 | Setup | 1 | 21 |
 | Hardware debug tool | 1 | 21 |
-| **Total** | **38** | **5,380** |
+| **Total** | **38** | **5,493** |
 
 `nero_urdf/meshes/*.stl` are runtime assets, not code. `apk/`, `build/`,
 generated `.pyd`/`.c` files, and `logs/` are excluded from the code count.
@@ -481,8 +493,8 @@ Coverage includes:
 - two-process IPC
 - PICO bridge helpers
 - ROS 2 topic payloads
-- dual-arm handoff and STOP behavior
-- English UI, status colors, System Log, and handoff dialog
+- dual-arm connection, STOP and Start behavior
+- English UI, status colors, System Log, and Start dialog
 - file and in-memory logging
 
 ## Troubleshooting
@@ -493,9 +505,23 @@ Coverage includes:
   environment and run `pip install -r requirements.txt`, then build again.
 - Windows build cannot find `cl.exe`: use an x64 Native Tools Command Prompt for
   VS 2022.
+- `ADB setup failed: adb not found`: install Android Platform-Tools or set
+  `PicoConfig.adb_path` (see [Install adb](#install-adb)).
 - PICO not found: check `adb devices`, USB debugging, and the APK package. The
   bridge retries ADB automatically.
-- Real arm connection fails: verify the SocketCAN channel and bitrate.
+- PICO controllers stay `LOST` while `PICO Input` is `CONNECTED`: a PICO system
+  dialog (`com.picovr.systemext/...HandDialogActivity`) can take input focus away
+  from the app. Disable that dialog once (re-enable with `pm enable`):
+  ```powershell
+  adb shell pm disable-user --user 0 com.picovr.systemext/com.pvr.vrdisplay.HandDialogActivity
+  ```
+  `pico_bridge` also restores focus automatically (`PicoConfig.focus_guard`). Do
+  not disable hand tracking system-wide: on some PICO builds it also disables the
+  controllers.
+- Real arm connection fails: verify the CAN channel and bitrate. Linux expects a
+  SocketCAN interface such as `can0`; Windows expects an `agx_cando` device index
+  such as `0`. On Windows, check that the USB-CAN adapter is plugged in and that
+  `python-can-agx-cando` is installed.
 - Port already in use: `run.py` selects the next free port; pass `--port`,
   `--vr-port`, or `--ipc-port` explicitly if needed.
 - ROS 2 output says `UNAVAILABLE`: the active environment needs `rclpy`,

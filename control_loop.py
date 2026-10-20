@@ -68,8 +68,6 @@ class ArmController:
         self.ros = RosOutput(config.ros_output, logger)
         self.phase = "STARTUP"
         self.error: str | None = None
-        self.handoff_id = 0
-        self.handoff_sides: tuple[str, ...] = ()
         self._arm_factory = arm_factory or RealArmBackend
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="arm")
         self._connect_futures: dict[str, Future] = {}
@@ -121,7 +119,7 @@ class ArmController:
         if self.phase == "STARTUP":
             self._step_startup()
             self._hold_following()
-        elif self.phase in ("HANDOFF", "ALIGNING"):
+        elif self.phase == "ALIGNING":
             self._hold_following()
         elif self.phase == "TELEOP":
             self._step_teleop()
@@ -162,30 +160,14 @@ class ArmController:
     def _finish_startup(self) -> None:
         self.logger.info("simulation startup pose reached")
         if self.real_backends:
-            self._open_handoff()
+            self._begin_alignment()
         else:
             self._enter_teleop()
 
-    # ------------------------------------------------------------------ handoff
-    def _open_handoff(self) -> None:
-        sides = tuple(sorted(self.real_backends))
-        if not sides:
+    # ------------------------------------------------------------------ alignment
+    def _begin_alignment(self) -> None:
+        if not self.real_backends:
             self._enter_teleop()
-            return
-        self.phase = "HANDOFF"
-        self.handoff_id += 1
-        self.handoff_sides = sides
-        self.logger.info("handoff requested sides=%s", ",".join(sides))
-
-    def _reopen_handoff(self) -> None:
-        if self.phase == "HANDOFF":
-            self._open_handoff()
-        elif self.phase == "TELEOP":
-            self.logger.info("new arm connected during teleop; returning simulation to startup pose")
-            self._begin_startup()
-
-    def _begin_alignment(self, request_id: int) -> None:
-        if self.phase != "HANDOFF" or request_id != self.handoff_id or not self.real_backends:
             return
         self._holds = {}
         self._align_futures = {}
@@ -250,6 +232,8 @@ class ArmController:
             starts[side] = hold
             self.sim_q[side] = hold.copy()
         self.following = set(self._holds)
+        for side in self.following:
+            self.arm_status[side] = replace(self.arm_status[side], state="TELEOP", error=None)
         self._enter_teleop(starts)
 
     # ------------------------------------------------------------------ teleop
@@ -263,7 +247,6 @@ class ArmController:
         self._planners = {side: ArmMotionPlanner(self.config.motion, starts[side]) for side in SIDES}
         self._last_hold = {side: starts[side].copy() for side in SIDES}
         self.phase = "TELEOP"
-        self.handoff_sides = ()
         self.logger.info("teleop started following=%s", ",".join(sorted(self.following)) or "none")
 
     def _step_teleop(self) -> None:
@@ -323,7 +306,7 @@ class ArmController:
     def _handle_command(self, command: ControlCommand) -> None:
         if self.phase == "FAULT":
             return
-        if self.phase == "STOPPED" and command.kind not in ("STOP", "DISCONNECT", "RESET"):
+        if self.phase == "STOPPED" and command.kind not in ("STOP", "DISCONNECT", "RESET", "CONNECT"):
             return
         if command.kind == "DISCONNECT" and (command.side in self._busy or self.phase == "ALIGNING"):
             return
@@ -335,24 +318,20 @@ class ArmController:
             self._connect(command.side, command.channel)
         elif command.kind == "DISCONNECT":
             self._disconnect_side(command.side)
-        elif command.kind == "CONFIRM":
-            self._begin_alignment(command.request_id)
-        elif command.kind == "CANCEL":
-            self._cancel_handoff()
         elif command.kind == "SET_ROS":
             self._set_ros(command.enabled)
 
     def _connect(self, side: str, channel: str) -> None:
         if side not in SIDES or side in self.real_backends or side in self._busy:
             return
-        if self.phase in ("ALIGNING", "STOPPED", "FAULT"):
+        if self.phase in ("ALIGNING", "FAULT"):
             return
         channel = channel or self.config.real.channel
         for other in SIDES:
             if other == side:
                 continue
             status = self.arm_status[other]
-            if status.state in ("CONNECTING", "READY", "TELEOP", "ALIGNING") and status.channel == channel:
+            if status.state in ("CONNECTING", "READY", "TELEOP", "ALIGNING", "STOPPED") and status.channel == channel:
                 self.logger.warning("refusing duplicate channel %s", channel)
                 self.arm_status[side] = replace(self.arm_status[side], state="ERROR", error="channel already in use")
                 return
@@ -377,17 +356,18 @@ class ArmController:
                 self.arm_status[side] = replace(self.arm_status[side], state="ERROR", error=str(exc))
                 self.logger.warning("failed to connect %s arm: %s", side, exc)
                 continue
-            if self._stop_motion.is_set() or self._stop_event.is_set() or self.phase in ("STOPPED", "FAULT"):
+            if self._stop_event.is_set() or self.phase == "FAULT":
                 self._executor.submit(self._close_worker, backend)
                 self.arm_status[side] = replace(self.arm_status[side], state="STOPPED")
                 continue
             self.real_backends[side] = backend
             self.arm_status[side] = ArmStatus(
-                state="READY",
+                state="STOPPED",
                 channel=getattr(backend, "config", self.config.real).channel,
             )
-            self.logger.info("connected %s arm", side)
-            self._reopen_handoff()
+            self.logger.info("connected %s arm; STOP latched", side)
+            if self.phase != "STOPPED":
+                self._stop_all(reason=f"{side} arm connected")
 
     def _disconnect_side(self, side: str, state: str = "SIM") -> None:
         backend = self.real_backends.pop(side, None)
@@ -397,30 +377,16 @@ class ArmController:
         self.arm_status[side] = self.arm_status[side].__class__(state=state)
         if backend is not None:
             self._executor.submit(self._close_worker, backend)
-        if self.phase == "HANDOFF":
-            if self.real_backends:
-                self._open_handoff()
-            else:
-                self._enter_teleop()
-        elif self.phase == "ALIGNING" and not self.real_backends and not self._stop_motion.is_set():
+        if self.phase == "ALIGNING" and not self.real_backends and not self._stop_motion.is_set():
             self._enter_teleop()
 
-    def _cancel_handoff(self) -> None:
-        if self.phase != "HANDOFF":
-            return
-        for side in list(self.real_backends):
-            self._disconnect_side(side)
-        self.logger.info("handoff cancelled; simulation only")
-        self._enter_teleop()
-
-    def _stop_all(self) -> None:
+    def _stop_all(self, reason: str = "requested") -> None:
         self._stop_motion.set()
         self.phase = "STOPPED"
-        self.handoff_sides = ()
         for side in SIDES:
             if side in self.real_backends:
                 self.arm_status[side] = replace(self.arm_status[side], state="STOPPED")
-        self.logger.warning("STOP requested; holding all arms")
+        self.logger.warning("STOP latched: %s; holding all arms", reason)
 
     def _reset_stop(self) -> None:
         if self.phase != "STOPPED":
@@ -430,10 +396,9 @@ class ArmController:
             return
         self._stop_motion.clear()
         self.error = None
-        self.handoff_sides = ()
         for side in self.real_backends:
             self.arm_status[side] = replace(self.arm_status[side], state="READY")
-        self.logger.warning("STOP reset; returning simulation to startup")
+        self.logger.warning("start requested; returning simulation and arms to startup")
         self._begin_startup()
 
     def _set_ros(self, enabled: bool) -> None:
@@ -496,8 +461,6 @@ class ArmController:
                     "enabled": self.ros.enabled,
                     "reason": self.ros.reason,
                 },
-                handoff_id=self.handoff_id,
-                handoff_sides=self.handoff_sides,
                 error=self.error,
                 can_reset=self.phase == "STOPPED"
                 and not self._busy
@@ -512,7 +475,6 @@ class ArmController:
         self.error = f"{message}: {exc}"
         self.phase = "FAULT"
         self._stop_motion.set()
-        self.handoff_sides = ()
         self._publish_snapshot()
         for side, backend in list(self.real_backends.items()):
             if side not in self.following:
