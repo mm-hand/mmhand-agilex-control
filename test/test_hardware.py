@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -13,6 +14,7 @@ from hardware import (
     _firmware_name,
     _socketcan_state,
     detect_firmware,
+    enable_normal_push,
     validate_joint_command,
 )
 
@@ -71,13 +73,25 @@ class FakeRobot:
 
 
 class FakeDetectionRobot:
+    """Feedback only advances once CAN push has been requested."""
+
     def __init__(self, firmware=None) -> None:
         self.firmware = firmware
         self.enable_count = 0
+        self.normal_count = 0
         self.disconnected = False
+        self._timestamp = 0.0
 
     def get_firmware(self, timeout, min_interval):
         return self.firmware
+
+    def get_joint_angles(self):
+        if self.normal_count:
+            self._timestamp += 1.0
+        return SimpleNamespace(timestamp=self._timestamp)
+
+    def set_normal_mode(self):
+        self.normal_count += 1
 
     def enable(self):
         self.enable_count += 1
@@ -199,7 +213,7 @@ def test_detect_firmware_limits_compatibility_enable_rate():
 
 def test_detect_firmware_stops_on_socketcan_fault():
     robot = FakeDetectionRobot()
-    config = RealArmConfig(enable_timeout_s=1.0)
+    config = RealArmConfig(enable_timeout_s=1.0, can_fault_grace_s=0.0)
     logger = SimpleNamespace(info=lambda *args: None)
     with (
         patch("hardware.create_robot", return_value=robot),
@@ -213,6 +227,94 @@ def test_detect_firmware_stops_on_socketcan_fault():
         else:
             raise AssertionError("CAN fault should stop firmware detection")
     assert robot.enable_count == 0
+    assert robot.disconnected
+
+
+def test_detect_firmware_tolerates_fault_while_the_arm_boots():
+    robot = FakeDetectionRobot()
+    config = RealArmConfig(enable_timeout_s=0.12, can_fault_grace_s=5.0)
+    logger = SimpleNamespace(info=lambda *args: None)
+    with (
+        patch("hardware.create_robot", return_value=robot),
+        patch("hardware.install_can_send_timeout"),
+        patch("hardware._socketcan_state", return_value="ERROR-PASSIVE"),
+    ):
+        try:
+            detect_firmware(config, logger)
+        except RuntimeError as exc:
+            assert "ERROR-PASSIVE" not in str(exc)
+            assert "timed out detecting Nero firmware" in str(exc)
+        else:
+            raise AssertionError("firmware detection should time out")
+    assert robot.disconnected
+
+
+def test_detect_firmware_succeeds_on_arm_that_streams_only_after_normal_mode():
+    class PushGatedRobot(FakeDetectionRobot):
+        """Firmware <= 1.11 stays silent until CAN push is enabled."""
+
+        def get_firmware(self, timeout, min_interval):
+            return self.firmware if self.normal_count else None
+
+    robot = PushGatedRobot({"software_version": "1.10"})
+    config = RealArmConfig(interface="test", enable_timeout_s=2.0)
+    logger = SimpleNamespace(info=lambda *args: None)
+    with (
+        patch("hardware.create_robot", return_value=robot),
+        patch("hardware.install_can_send_timeout"),
+    ):
+        assert detect_firmware(config, logger) == "default"
+    assert robot.normal_count == 1
+    assert robot.disconnected
+
+
+class DoubleCallLockupRobot(FakeDetectionRobot):
+    """Hardware observed on the real arm: two back-to-back set_normal_mode()
+    calls leave CAN push disabled again."""
+
+    def __init__(self, firmware=None) -> None:
+        super().__init__(firmware)
+        self.push_on = False
+        self._last_normal = 0.0
+
+    def set_normal_mode(self):
+        now = time.monotonic()
+        self.push_on = now - self._last_normal >= 0.1
+        self._last_normal = now
+        self.normal_count += 1
+
+    def get_joint_angles(self):
+        if self.push_on:
+            self._timestamp += 1.0
+        return SimpleNamespace(timestamp=self._timestamp)
+
+    def enable(self):
+        self.enable_count += 1
+        return True
+
+
+def test_enable_normal_push_survives_double_set_normal_mode():
+    robot = DoubleCallLockupRobot()
+    enable_normal_push(robot, timeout_s=2.0, firmware="default")
+    assert robot.push_on, "a second set_normal_mode() disabled CAN push"
+
+
+def test_detect_firmware_enables_can_push_before_querying():
+    robot = FakeDetectionRobot()
+    config = RealArmConfig(interface="test", enable_timeout_s=0.12)
+    logger = SimpleNamespace(info=lambda *args: None)
+    with (
+        patch("hardware.create_robot", return_value=robot),
+        patch("hardware.install_can_send_timeout"),
+    ):
+        try:
+            detect_firmware(config, logger)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("firmware detection should time out")
+    assert robot.normal_count >= 1
+    assert robot.normal_count == robot.enable_count
     assert robot.disconnected
 
 

@@ -523,6 +523,20 @@ Coverage includes:
   SocketCAN interface such as `can0`; Windows expects an `agx_cando` device index
   such as `0`. On Windows, check that the USB-CAN adapter is plugged in and that
   `python-can-agx-cando` is installed.
+- The arm connects but stays silent (`candump can0` shows nothing): Nero firmware
+  at or below 1.11 only streams feedback after CAN push is enabled with
+  `set_normal_mode()`. Firmware auto-detection now sends that request itself, so a
+  freshly power-cycled arm needs no manual step; if it still stays silent, enable
+  CAN push in the vendor web UI or set `RealArmConfig.firmware` explicitly.
+  Push requests must stay at least ~100 ms apart: two `set_normal_mode()` calls in
+  a row disable push again on this firmware, so the connect path spaces them and
+  re-arms when the stream stops. A mid-run stall (green feedback ghost frozen at
+  an old pose) is now re-requested automatically instead of staying stale.
+- `SocketCAN interface 'can0' entered ERROR-PASSIVE` right after power-up: the arm
+  does not acknowledge frames until its controller has booted, so the interface
+  drops into passive error state for a few seconds. Transient faults are retried
+  for `RealArmConfig.can_fault_grace_s` seconds; a fault that outlasts that points
+  at wiring, bitrate, or missing 24 V power.
 - Port already in use: `run.py` selects the next free port; pass `--port`,
   `--vr-port`, or `--ipc-port` explicitly if needed.
 - ROS 2 output says `UNAVAILABLE`: the active environment needs `rclpy`,

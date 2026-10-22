@@ -145,6 +145,7 @@ class RealArmConfig:
     speed_percent: int = 20
     startup_timeout_s: float = 3.0
     enable_timeout_s: float = 5.0
+    can_fault_grace_s: float = 3.0
     can_send_timeout_s: float = 0.05
     can_frame_interval_s: float = 0.005
     servo_handoff_s: float = 0.2

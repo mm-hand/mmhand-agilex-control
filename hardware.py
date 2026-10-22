@@ -74,13 +74,33 @@ def _socketcan_state(config: RealArmConfig) -> str | None:
     except (IndexError, KeyError, OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"failed to inspect SocketCAN interface {config.channel!r}") from exc
 
-def _raise_for_can_fault(config: RealArmConfig) -> None:
+_CAN_FAULT_STATES = frozenset({"ERROR-PASSIVE", "BUS-OFF", "STOPPED"})
+
+def _raise_for_can_fault(
+    config: RealArmConfig,
+    fault_since: float | None = None,
+    grace_s: float = 0.0,
+) -> float | None:
+    """Raise only after the interface has been faulted for ``grace_s`` seconds.
+
+    A freshly powered Nero arm does not acknowledge CAN frames until its
+    controller has booted, which drives the host interface into
+    ERROR-PASSIVE for a few seconds.  Treating that as fatal aborts the
+    connection even though a retry moments later succeeds, so callers pass the
+    previous return value back in to measure how long the fault has lasted.
+    """
     state = _socketcan_state(config)
-    if state in {"ERROR-PASSIVE", "BUS-OFF", "STOPPED"}:
-        raise RuntimeError(
-            f"SocketCAN interface {config.channel!r} entered {state}; stop the arm program, "
-            "reset the CAN interface, and verify bitrate, H/L wiring, power, and passive RX traffic"
-        )
+    if state not in _CAN_FAULT_STATES:
+        return None
+    now = time.monotonic()
+    if fault_since is None:
+        fault_since = now
+    if now - fault_since < grace_s:
+        return fault_since
+    raise RuntimeError(
+        f"SocketCAN interface {config.channel!r} entered {state}; stop the arm program, "
+        "reset the CAN interface, and verify bitrate, H/L wiring, power, and passive RX traffic"
+    )
 
 def _log_sdk_identity(config: RealArmConfig, logger: logging.Logger) -> None:
     _sdk(config)
@@ -91,7 +111,7 @@ def _log_sdk_identity(config: RealArmConfig, logger: logging.Logger) -> None:
         Path(pyAgxArm.__file__).resolve(),
     )
 
-def ensure_socketcan_ready(config: RealArmConfig) -> None:
+def ensure_socketcan_ready(config: RealArmConfig, logger: logging.Logger | None = None) -> None:
     if config.interface != "socketcan":
         return
     net_dir = Path("/sys/class/net") / config.channel
@@ -104,7 +124,15 @@ def ensure_socketcan_ready(config: RealArmConfig) -> None:
             f"sudo ip link set {config.channel} type can bitrate {config.bitrate}; "
             f"sudo ip link set {config.channel} up"
         )
-    _raise_for_can_fault(config)
+    # A fault left behind by a previous attempt clears itself once frames are
+    # acknowledged again, so report it and let the connect path retry instead of
+    # refusing to start before any traffic has been sent.
+    state = _socketcan_state(config)
+    if state in _CAN_FAULT_STATES and logger is not None:
+        logger.warning(
+            "SocketCAN interface %r is %s; retrying after enabling CAN push",
+            config.channel, state,
+        )
 
 def create_robot(config: RealArmConfig, firmware: str):
     AgxArmFactory, ArmModel, _, create_agx_arm_config = _sdk(config)
@@ -123,11 +151,83 @@ def create_robot(config: RealArmConfig, firmware: str):
         raise
     return robot
 
+def _joint_feedback_timestamp(robot) -> float | None:
+    try:
+        packet = robot.get_joint_angles()
+    except Exception:
+        return None
+    if packet is None:
+        return None
+    try:
+        return float(packet.timestamp)
+    except (TypeError, ValueError):
+        return None
+
+_push_command_lock = threading.Lock()
+_push_command_at = 0.0
+
+def _send_push_command(set_normal_mode) -> None:
+    """Send a CAN push request while keeping the arm-side spacing.
+
+    The controller disables push again when two mode-configurations arrive less
+    than ~100 ms apart, and firmware detection plus connect each issue one, so
+    the gap is enforced across the whole process rather than per driver object.
+    """
+    global _push_command_at
+    with _push_command_lock:
+        wait = _push_command_at + 0.2 - time.monotonic()
+        if wait > 0.0:
+            time.sleep(wait)
+        set_normal_mode()
+        _push_command_at = time.monotonic()
+
+def _stream_stable(robot, window_s: float, min_updates: int = 5) -> bool:
+    """True when feedback keeps advancing for the whole window.
+
+    Checking a single timestamp advance is not enough: the controller sometimes
+    accepts a push request and stops streaming again a few tens of milliseconds
+    later, so the stream must still be alive at the end of the window.
+    """
+    deadline = time.monotonic() + window_s
+    seen: set[float] = set()
+    previous = None
+    last_change = None
+    while time.monotonic() < deadline:
+        timestamp = _joint_feedback_timestamp(robot)
+        if timestamp is not None:
+            if previous is not None and timestamp != previous:
+                last_change = time.monotonic()
+            seen.add(timestamp)
+            previous = timestamp
+        time.sleep(0.02)
+    if last_change is None or len(seen) < min_updates:
+        return False
+    return time.monotonic() - last_change <= 0.1
+
+def enable_can_push(robot, settle_s: float = 0.2, attempts: int = 3) -> bool:
+    """Turn on active CAN reporting and confirm that fresh frames arrive.
+
+    Nero firmware at or below 1.11 stops streaming feedback until
+    ``set_normal_mode()`` enables CAN push (the vendor's own "no data from
+    candump" troubleshooting).  Two ``set_normal_mode()`` calls issued back to
+    back leave the controller with push *disabled*, so calls are spaced and the
+    result is verified against the feedback timestamp instead of assumed.
+    """
+    set_normal_mode = getattr(robot, "set_normal_mode", None)
+    if set_normal_mode is None:
+        return True
+    for _ in range(attempts):
+        _send_push_command(set_normal_mode)
+        if _stream_stable(robot, window_s=settle_s):
+            return True
+    return False
+
 def detect_firmware(config: RealArmConfig, logger: logging.Logger) -> str:
     robot = create_robot(config, "default")
     deadline = time.monotonic() + config.enable_timeout_s
     next_enable_at = time.monotonic()
     last_error: Exception | None = None
+    fault_since: float | None = None
     try:
         install_can_send_timeout(robot, config.can_send_timeout_s)
         while time.monotonic() < deadline:
@@ -135,28 +235,30 @@ def detect_firmware(config: RealArmConfig, logger: logging.Logger) -> str:
                 firmware = robot.get_firmware(timeout=0.3, min_interval=1.0)
             except Exception as exc:
                 last_error = exc
-                _raise_for_can_fault(config)
             else:
                 if firmware:
                     software = str(firmware.get("software_version", "")).strip()
                     selected = _firmware_name(software)
                     logger.info("detected Nero arm_firmware=%s driver=%s", software, selected)
                     return selected
-            _raise_for_can_fault(config)
+            fault_since = _raise_for_can_fault(config, fault_since, config.can_fault_grace_s)
             now = time.monotonic()
             if now >= next_enable_at:
                 try:
+                    enable_can_push(robot)
                     robot.enable()
                 except Exception as exc:
                     last_error = exc
                 next_enable_at = now + 1.0
-                _raise_for_can_fault(config)
+                fault_since = _raise_for_can_fault(config, fault_since, config.can_fault_grace_s)
             time.sleep(0.05)
     finally:
         robot.disconnect()
     message = (
-        "timed out detecting Nero firmware; check CAN feedback or set "
-        "RealArmConfig.firmware to default/v111/v112/v120"
+        "timed out detecting Nero firmware; the arm sends no feedback. Check that the arm "
+        "finished booting, that CAN push is enabled (firmware <= 1.11 needs set_normal_mode), "
+        "and that bitrate, H/L wiring and 24 V power are correct; or set "
+        "RealArmConfig.firmware to default/v111/v112/v120 explicitly"
     )
     raise RuntimeError(message) from last_error
 
@@ -197,10 +299,21 @@ def read_current_joint_angles(robot, timeout_s: float) -> np.ndarray:
     return read_joint_feedback(robot, timeout_s)[0]
 
 def wait_for_feedback(robot, timeout_s: float) -> bool:
+    """Wait until the arm is actively streaming, not merely cached.
+
+    The SDK keeps returning the last parsed packet, so a silent arm still looks
+    "available"; require the joint timestamp to advance instead.
+    """
     deadline = time.monotonic() + timeout_s
+    first_timestamp: float | None = None
     while time.monotonic() < deadline:
-        if read_feedback_sample(robot) is not None or robot.get_arm_status() is not None:
-            return True
+        sample = read_feedback_sample(robot)
+        if sample is not None:
+            timestamp = float(sample[1])
+            if first_timestamp is None:
+                first_timestamp = timestamp
+            elif timestamp != first_timestamp:
+                return True
         time.sleep(0.02)
     return False
 
@@ -210,20 +323,22 @@ def enable_normal_push(robot, timeout_s: float, firmware: str) -> None:
     last_error: Exception | None = None
     while time.monotonic() < deadline:
         try:
-            if not modern:
-                robot.set_normal_mode()
-            if robot.enable():
-                if not modern:
-                    robot.set_normal_mode()
-                return
+            enabled = robot.enable()
         except Exception as exc:
             last_error = exc
+            enabled = False
+        if enabled:
+            # Push is enabled exactly once and only after enable(): a second
+            # set_normal_mode() immediately after the first turns it back off.
+            if modern or enable_can_push(robot):
+                return
+            last_error = RuntimeError("Nero CAN push did not start")
         time.sleep(0.05)
     raise RuntimeError(f"timed out enabling Nero with firmware driver {firmware}") from last_error
 
 def connect_robot(config: RealArmConfig, logger: logging.Logger):
     _log_sdk_identity(config, logger)
-    ensure_socketcan_ready(config)
+    ensure_socketcan_ready(config, logger)
     firmware = detect_firmware(config, logger) if config.firmware == "auto" else config.firmware
     if firmware not in _FIRMWARE_NAMES:
         raise ValueError(f"unsupported Nero firmware: {firmware}")
@@ -235,7 +350,14 @@ def connect_robot(config: RealArmConfig, logger: logging.Logger):
         install_can_frame_interval(robot, config.can_frame_interval_s)
         enable_normal_push(robot, config.enable_timeout_s, firmware)
         if not wait_for_feedback(robot, config.startup_timeout_s):
-            raise RuntimeError(f"timed out waiting for Nero feedback with firmware driver {firmware}")
+            # The controller drops CAN push again on some mode-message races, so
+            # re-request it once instead of failing straight away.
+            logger.warning("no Nero feedback after enabling; re-requesting CAN push")
+            if enable_can_push(robot) and wait_for_feedback(robot, config.startup_timeout_s):
+                logger.info("Nero feedback recovered side=%s", config.channel)
+            else:
+                _raise_for_can_fault(config)
+                raise RuntimeError(f"timed out waiting for Nero feedback with firmware driver {firmware}")
         if hasattr(robot, "set_joint_limits_enabled"):
             robot.set_joint_limits_enabled(config.sdk_joint_limits_enabled)
         if hasattr(robot, "set_speed_percent"):
@@ -279,6 +401,7 @@ class RealArmBackend:
         self.joint_updated_at = now
         self.motor_updated_at = np.full(7, now)
         self.feedback_warning = False
+        self._push_rearm_at = 0.0
         self.last_sent_q = self.q_feedback.copy()
         self.js_active = False
     def _connect_robot(self):
@@ -369,12 +492,27 @@ class RealArmBackend:
                 or np.any(now - self.motor_updated_at > self.config.feedback_stale_s)
             ):
                 self._warn_feedback("joint-angle or motor-state packet stream is stale")
+                self._rearm_can_push()
                 return False
             if self.feedback_warning:
                 self.logger.info("joint feedback recovered side=%s", self.side)
             self.feedback_warning = False
             self.q_feedback = joint_q
             return True
+    def _rearm_can_push(self) -> None:
+        """Re-request CAN push when the arm goes silent, at most once a second."""
+        now = time.monotonic()
+        if now - self._push_rearm_at < 1.0:
+            return
+        self._push_rearm_at = now
+        set_normal_mode = getattr(self.robot, "set_normal_mode", None)
+        if set_normal_mode is None:
+            return
+        try:
+            _send_push_command(set_normal_mode)
+            self.logger.warning("re-requested CAN push side=%s", self.side)
+        except Exception:
+            pass
     def _warn_feedback(self, reason: str) -> None:
         if not self.feedback_warning:
             self.logger.warning("joint feedback unavailable side=%s: %s; continuing", self.side, reason)
@@ -397,7 +535,7 @@ class RealArmBackend:
                 if hasattr(self.robot, "set_auto_set_motion_mode_enabled"):
                     self.robot.set_auto_set_motion_mode_enabled(True)
                 if self.firmware not in {"v112", "v120"} and hasattr(self.robot, "set_normal_mode"):
-                    self.robot.set_normal_mode()
+                    _send_push_command(self.robot.set_normal_mode)
             except Exception:
                 pass
         finally:
