@@ -77,13 +77,36 @@ def adb_remove_reverse(config: PicoConfig) -> None:
         pass
 
 
-def focus_lines(text: str) -> list[str]:
-    return [line for line in text.splitlines() if "mCurrentFocus=" in line or "mFocusedApp=" in line]
+# PICO system overlays that grab input focus while the VR app keeps running.
+# `HandDialogActivity` opens on its own virtual display and `PicoXR_CustomDialog`
+# is the window that actually covers the VR view; both come from the system ext
+# package and neither answers BACK.
+SYSTEM_OVERLAY_TOKENS = ("HandDialogActivity", "PicoXR_CustomDialog")
 
+def current_focus_windows(text: str) -> list[str]:
+    """Windows actually holding input focus, per display, skipping idle ones."""
+    windows = []
+    for line in text.splitlines():
+        if "mCurrentFocus=" not in line:
+            continue
+        window = line.split("mCurrentFocus=", 1)[1].split("mFocusedApp=")[0].strip()
+        if window.startswith("null"):
+            continue
+        windows.append(window)
+    return windows
 
-def hand_dialog_focused(text: str) -> bool:
-    return any("HandDialogActivity" in line for line in focus_lines(text))
+def focus_stealer(text: str) -> str | None:
+    """Name of the PICO system overlay holding window focus, if any.
 
+    Only ``mCurrentFocus`` counts: ``mFocusedApp`` keeps a stale ActivityRecord
+    for the dialog after its window is gone, and acting on that would force-stop
+    the overlay package over and over.
+    """
+    for window in current_focus_windows(text):
+        for token in SYSTEM_OVERLAY_TOKENS:
+            if token in window:
+                return token
+    return None
 
 def read_focus(config: PicoConfig) -> str:
     adb = find_adb(config)
@@ -98,16 +121,17 @@ def read_focus(config: PicoConfig) -> str:
 
 
 def restore_focus(config: PicoConfig) -> None:
+    """Dismiss the system overlay that took focus away from the VR app.
+
+    Measured on a PICO with the dialog showing: `am start --activity-single-top`
+    reports "intent has been delivered to currently running top-most instance"
+    and changes nothing, and injected BACK/ESCAPE keys land on display 0 while
+    the dialog owns a virtual display of its own. Force-stopping the host process
+    is the only action that actually returns focus, and it does so immediately.
+    """
     adb = find_adb(config)
     subprocess.run(
-        [adb, "shell", "input", "keyevent", "KEYCODE_BACK"],
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        timeout=5.0,
-    )
-    subprocess.run(
-        [adb, "shell", "am", "start", "-n", f"{config.package}/.MainActivity"],
+        [adb, "shell", "am", "force-stop", config.overlay_package],
         check=False,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -228,15 +252,20 @@ class PicoBridge:
             await asyncio.sleep(self.config.focus_guard_interval_s)
             try:
                 text = await asyncio.to_thread(read_focus, self.config)
-                if not hand_dialog_focused(text):
+                stealer = focus_stealer(text)
+                if stealer is None:
                     last_error = None
                     continue
                 now = time.monotonic()
-                if now - last_restore < 5.0:
+                if now - last_restore < self.config.focus_guard_min_interval_s:
                     continue
                 last_restore = now
-                self.logger.warning("PICO hand dialog stole focus; restoring")
+                self.logger.warning("PICO overlay %s stole focus; dismissing", stealer)
                 await asyncio.to_thread(restore_focus, self.config)
+                if focus_stealer(await asyncio.to_thread(read_focus, self.config)) is None:
+                    self.logger.info("PICO focus restored after dismissing %s", stealer)
+                else:
+                    self.logger.warning("PICO overlay %s still holds focus", stealer)
                 last_error = None
             except Exception as exc:
                 message = str(exc)

@@ -511,14 +511,22 @@ Coverage includes:
 - PICO not found: check `adb devices`, USB debugging, and the APK package. The
   bridge retries ADB automatically.
 - PICO controllers stay `LOST` while `PICO Input` is `CONNECTED`: a PICO system
-  dialog (`com.picovr.systemext/...HandDialogActivity`) can take input focus away
-  from the app. Disable that dialog once (re-enable with `pm enable`):
+  overlay takes input focus away from the app. Two windows do this — the
+  `HandDialogActivity` prompt, which opens on its own virtual display, and
+  `PicoXR_CustomDialog`, which is what actually covers the VR view. Neither
+  answers BACK, and `am start` is a no-op because the app is already the top
+  instance, so `pico_bridge` watches `mCurrentFocus` every 0.5 s and force-stops
+  the overlay package (`PicoConfig.focus_guard`, `overlay_package`) when one of
+  them appears; it re-reads focus afterwards and logs whether the app recovered.
+  Do not disable hand tracking system-wide: on some PICO builds it also disables
+  the controllers.
+- Disabling the dialog outright is not always possible: on the tested PICO build
+  `pm disable-user` for the component fails with
+  `SecurityException: Shell cannot change component state`, so the focus guard is
+  the only path. Check what currently holds focus with:
   ```powershell
-  adb shell pm disable-user --user 0 com.picovr.systemext/com.pvr.vrdisplay.HandDialogActivity
+  adb shell "dumpsys window | grep mCurrentFocus"
   ```
-  `pico_bridge` also restores focus automatically (`PicoConfig.focus_guard`). Do
-  not disable hand tracking system-wide: on some PICO builds it also disables the
-  controllers.
 - Real arm connection fails: verify the CAN channel and bitrate. Linux expects a
   SocketCAN interface such as `can0`; Windows expects an `agx_cando` device index
   such as `0`. On Windows, check that the USB-CAN adapter is plugged in and that

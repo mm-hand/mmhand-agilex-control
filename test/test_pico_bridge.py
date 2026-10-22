@@ -9,7 +9,7 @@ from pico_bridge.bridge import (
     adb_remove_reverse,
     adb_setup,
     find_adb,
-    hand_dialog_focused,
+    focus_stealer,
     restore_focus,
 )
 
@@ -54,24 +54,73 @@ def test_status_reports_disabled_adb():
     assert status["rate_hz"] == 0.0
 
 
-def test_hand_dialog_focused_detects_system_dialog():
+def test_focus_stealer_detects_system_dialog():
     text = (
         "  mCurrentFocus=Window{6502072 u0 com.picovr.systemext/com.pvr.vrdisplay.HandDialogActivity}\n"
         "  mFocusedApp=ActivityRecord{55a3138 u0 com.picovr.systemext/com.pvr.vrdisplay.HandDialogActivity t14}\n"
     )
-    assert hand_dialog_focused(text)
+    assert focus_stealer(text) == "HandDialogActivity"
 
 
-def test_hand_dialog_focused_ignores_app_and_home():
+def test_focus_stealer_ignores_app_and_home():
     text = (
         "  mCurrentFocus=Window{6708500 u0 com.mmhand.pico_head_relative_pose/..."
         "com.mmhand.pico_head_relative_pose.MainActivity}\n"
         "  mFocusedApp=ActivityRecord{b5e96cf u0 com.pvr.home/.RecActivity t4}\n"
     )
-    assert not hand_dialog_focused(text)
+    assert focus_stealer(text) is None
 
 
-def test_restore_focus_sends_back_then_starts_app(tmp_path, monkeypatch):
+def test_focus_stealer_detects_the_vr_custom_dialog():
+    # Observed on a PICO: this window, not HandDialogActivity, is what covers the
+    # VR view, and the old guard only matched HandDialogActivity.
+    text = "  mCurrentFocus=Window{a46feec u0 PicoXR_CustomDialog}\n"
+    assert focus_stealer(text) == "PicoXR_CustomDialog"
+
+
+def test_focus_stealer_ignores_a_stale_focused_app_record():
+    # After the dialog window is gone, mFocusedApp keeps its ActivityRecord; the
+    # guard must not keep force-stopping the overlay because of it.
+    text = (
+        "  mCurrentFocus=null  mFocusedApp=ActivityRecord{bf1fd22 u0 "
+        "com.picovr.systemext/com.pvr.vrdisplay.HandDialogActivity t11}\n"
+        "  mCurrentFocus=Window{22b3a33 u0 com.mmhand.pico_head_relative_pose/..."
+        "com.mmhand.pico_head_relative_pose.MainActivity}\n"
+    )
+    assert focus_stealer(text) is None
+
+
+def test_focus_stealer_ignores_the_system_menu():
+    text = (
+        "  mCurrentFocus=Window{7044a4e u0 com.pvr.appmanager/.AllAppActivity}\n"
+        "  mFocusedApp=ActivityRecord{b5e96cf u0 com.pvr.home/.RecActivity t4}\n"
+    )
+    assert focus_stealer(text) is None
+
+
+def test_focus_loop_dismisses_the_overlay_and_confirms(monkeypatch):
+    import asyncio
+
+    stolen = "  mCurrentFocus=Window{1b245c4 u0 com.picovr.systemext/com.pvr.vrdisplay.HandDialogActivity}\n"
+    healthy = "  mCurrentFocus=Window{22b3a33 u0 com.mmhand.pico_head_relative_pose/.MainActivity}\n"
+    outputs = iter([stolen, healthy])
+    dismissed = []
+    monkeypatch.setattr("pico_bridge.bridge.read_focus", lambda _config: next(outputs, healthy))
+    monkeypatch.setattr("pico_bridge.bridge.restore_focus", lambda _config: dismissed.append(True))
+    config = PicoConfig(focus_guard_interval_s=0.01, focus_guard_min_interval_s=0.0)
+    bridge = PicoBridge(config, logging.getLogger("test"))
+
+    async def run() -> None:
+        task = asyncio.create_task(bridge._focus_loop())
+        await asyncio.sleep(0.08)
+        bridge.stop()
+        await asyncio.wait_for(task, timeout=2.0)
+
+    asyncio.run(run())
+    assert dismissed == [True]
+
+
+def test_restore_focus_force_stops_the_overlay(tmp_path, monkeypatch):
     adb = tmp_path / "adb.exe"
     adb.write_text("", encoding="utf-8")
     calls = []
@@ -81,12 +130,6 @@ def test_restore_focus_sends_back_then_starts_app(tmp_path, monkeypatch):
     )
     config = PicoConfig(adb_path=str(adb))
     restore_focus(config)
-    assert calls[0] == [str(adb), "shell", "input", "keyevent", "KEYCODE_BACK"]
-    assert calls[1] == [
-        str(adb),
-        "shell",
-        "am",
-        "start",
-        "-n",
-        f"{config.package}/.MainActivity",
-    ]
+    # BACK never reached the dialog (it owns its own virtual display) and starting
+    # MainActivity was a no-op, so only the force-stop is issued.
+    assert calls == [[str(adb), "shell", "am", "force-stop", config.overlay_package]]

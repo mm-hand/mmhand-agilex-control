@@ -32,7 +32,9 @@ class PicoConfig:
     adb_retry_s: float = 3.0
     status_hz: float = 2.0
     focus_guard: bool = True
-    focus_guard_interval_s: float = 2.0
+    focus_guard_interval_s: float = 0.5
+    focus_guard_min_interval_s: float = 2.0
+    overlay_package: str = "com.picovr.systemext"
 
 
 @dataclass(frozen=True)
