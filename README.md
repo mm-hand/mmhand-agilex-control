@@ -231,12 +231,13 @@ Editable fields:
 
 Buttons:
 
-- `Save`: validate and write `settings.json`
-- `Restore Defaults`: remove `settings.json` and restore the displayed defaults
+- `Apply`: validate, write `settings.json`, and apply immediately
+- `Restore Defaults`: remove `settings.json`, restore the displayed defaults, and apply immediately
 
-Settings are applied at the next `python run.py`. The page shows
-`Restart to apply.` after a save. This avoids changing arm-base coordinates
-during an active teleoperation session.
+Settings are applied without restarting the process. Base-frame changes update
+the running controller and the 3D scene immediately. Startup-pose changes are
+stored immediately, but the arms move to that pose on the next START or after
+`STOP` → `Reset`, because it is a pose target rather than a live override.
 
 If `settings.json` is missing or invalid, the application logs a warning and
 uses the `config.py` defaults.
@@ -407,9 +408,9 @@ Line counts are total file lines, including blank lines and comments.
 analytic_control/
 ├── run.py                              183
 ├── config.py                           177
-├── control_loop.py                     491
-├── controller_state.py                  65
-├── settings_store.py                    92
+├── control_loop.py                     494
+├── controller_state.py                  66
+├── settings_store.py                    93
 ├── ipc.py                              238
 ├── pose_source.py                      147
 ├── ros_output.py                       131
@@ -433,10 +434,10 @@ analytic_control/
 │
 ├── ui/
 │   ├── __init__.py                       0
-│   ├── app.py                          292
+│   ├── app.py                          295
 │   ├── controllers.py                   66
-│   ├── scene.py                        300
-│   └── settings.py                      88
+│   ├── scene.py                        315
+│   └── settings.py                      94
 │
 ├── test/
 │   ├── __init__.py                       0
@@ -460,13 +461,13 @@ Source code totals, excluding this README, requirements, and pytest.ini:
 
 | Group | Files | Lines |
 |---|---:|---:|
-| Core control and kinematics | 17 | 3,100 |
+| Core control and kinematics | 17 | 3,105 |
 | PICO bridge | 4 | 424 |
-| NiceGUI | 5 | 746 |
+| NiceGUI | 5 | 770 |
 | Tests | 10 | 1,181 |
 | Setup | 1 | 21 |
 | Hardware debug tool | 1 | 21 |
-| **Total** | **38** | **5,493** |
+| **Total** | **38** | **5,522** |
 
 `nero_urdf/meshes/*.stl` are runtime assets, not code. `apk/`, `build/`,
 generated `.pyd`/`.c` files, and `logs/` are excluded from the code count.

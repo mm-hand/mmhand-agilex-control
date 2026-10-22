@@ -4,7 +4,7 @@ import sys
 
 from nicegui import app, ui
 
-from config import default_can_channels
+from config import ControlConfig, default_can_channels
 from controller_state import ControlCommand
 from logging_utils import LogBuffer
 from ui.controllers import build_controllers
@@ -177,7 +177,10 @@ def build_page(controller, store, config, log_buffer: LogBuffer) -> None:
                     with ui.tab_panel(TABS[1]).classes("w-full h-full controllers-panel"):
                         controllers_refresh = build_controllers()
                     with ui.tab_panel(TABS[2]).classes("w-full h-full settings-panel"):
-                        build_settings(config)
+                        def apply_config(new_config: ControlConfig) -> None:
+                            controller.submit(ControlCommand("APPLY_SETTINGS", config=new_config))
+                            visual.set_bases(new_config)
+                        build_settings(config, apply_config)
             with workspace.separator:
                 with ui.element("div").classes("log-resize-grip"):
                     ui.tooltip("Drag to resize System Log")

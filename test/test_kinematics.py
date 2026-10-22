@@ -140,10 +140,10 @@ def test_joint_trajectory_reaches_far_pose():
 
 def test_joint_trajectory_does_not_wrap_across_joint_limits():
     motion = MotionConfig()
-    target = np.asarray(ControlConfig().startup.right_pose_rad, dtype=float)
-    q_start = clip_to_joint_limits(target, motion)
+    target = clip_to_joint_limits(np.asarray(ControlConfig().startup.right_pose_rad, dtype=float), motion)
+    target[4] = -2.70
+    q_start = target.copy()
     q_start[4] = 2.70
     points = joint_trajectory(motion, q_start, target)
-    clipped = clip_to_joint_limits(target, motion)
     assert points[-1][4] < 0.0
-    assert abs(points[-1][4] - clipped[4]) < 1e-6
+    assert abs(points[-1][4] - target[4]) < 1e-6

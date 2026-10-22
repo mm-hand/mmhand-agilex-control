@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from typing import Callable
 
 from nicegui import ui
 
@@ -8,12 +9,12 @@ from config import ControlConfig
 from settings_store import reset_settings, save_settings, settings_data
 
 
-def build_settings(config: ControlConfig) -> None:
+def build_settings(config: ControlConfig, on_apply: Callable[[ControlConfig], None]) -> None:
     values = settings_data(config)
     startup_inputs = {}
     frame_inputs = {}
 
-    ui.label("Settings are stored in settings.json and applied on restart.").classes("text-sm text-slate-600")
+    ui.label("Settings are applied immediately.").classes("text-sm text-slate-600")
 
     with ui.card().classes("w-full"):
         ui.label("Startup Pose").classes("font-semibold text-base")
@@ -51,6 +52,7 @@ def build_settings(config: ControlConfig) -> None:
     status = ui.label("").classes("text-sm text-slate-700")
 
     def save() -> None:
+        nonlocal config
         try:
             data = {
                 "startup": {
@@ -63,15 +65,17 @@ def build_settings(config: ControlConfig) -> None:
                     for key, inputs in frame_inputs[side].items()
                 },
             }
-            save_settings(data)
+            config = save_settings(data, config=config)
         except Exception as exc:
             status.set_text(f"Save failed: {exc}")
             ui.notify(f"Save failed: {exc}", type="negative")
             return
-        status.set_text("Saved. Restart to apply.")
-        ui.notify("Settings saved. Restart to apply.", type="positive")
+        on_apply(config)
+        status.set_text("Applied.")
+        ui.notify("Settings applied.", type="positive")
 
     def restore() -> None:
+        nonlocal config
         reset_settings()
         defaults = settings_data(ControlConfig())
         for side in ("left", "right"):
@@ -80,9 +84,11 @@ def build_settings(config: ControlConfig) -> None:
             for key, inputs in frame_inputs[side].items():
                 for index, number in enumerate(inputs):
                     number.set_value(defaults["frames"][key][index])
-        status.set_text("Defaults restored. Restart to apply.")
-        ui.notify("Defaults restored. Restart to apply.", type="positive")
+        config = ControlConfig()
+        on_apply(config)
+        status.set_text("Defaults restored and applied.")
+        ui.notify("Defaults restored and applied.", type="positive")
 
     with ui.row().classes("w-full items-center gap-2"):
-        ui.button("Save", on_click=save).props("unelevated")
+        ui.button("Apply", on_click=save).props("unelevated")
         ui.button("Restore Defaults", on_click=restore).props("outline")

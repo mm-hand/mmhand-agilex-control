@@ -59,12 +59,13 @@ def apply_settings(config: ControlConfig, data: dict) -> ControlConfig:
     return replace(config, startup=startup, frames=frames)
 
 
-def save_settings(data: dict, path: Path = SETTINGS_PATH) -> None:
-    apply_settings(ControlConfig(), data)
+def save_settings(data: dict, path: Path = SETTINGS_PATH, config: ControlConfig | None = None) -> ControlConfig:
+    config = apply_settings(config or ControlConfig(), data)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     temporary.replace(path)
+    return config
 
 
 def settings_data(config: ControlConfig) -> dict:

@@ -170,9 +170,7 @@ class _UrdfArm:
         self.visible = True
         with scene:
             self.base_group = scene.group()
-        transform = _scene_transform(base)
-        self.base_group.move(*transform[:3, 3])
-        self.base_group.rotate_R(transform[:3, :3].tolist())
+        self.set_base(base)
         self._build_link(scene, model.base_link, self.base_group)
         if opacity >= 1.0:
             with self.base_group:
@@ -220,6 +218,11 @@ class _UrdfArm:
                 _axis_transform(self.model.joints[joint_name].axis, q[index])[:3, :3].tolist()
             )
 
+    def set_base(self, base: np.ndarray) -> None:
+        transform = _scene_transform(base)
+        self.base_group.move(*transform[:3, 3])
+        self.base_group.rotate_R(transform[:3, :3].tolist())
+
     def set_visible(self, visible: bool) -> None:
         if visible == self.visible:
             return
@@ -263,6 +266,18 @@ class TeleopScene:
                         self.right_ghost = ghost
                 ghost.set_visible(True)
                 ghost.update(real)
+
+    def set_bases(self, config: ControlConfig) -> None:
+        self.bases = arm_base_in_horizon(config.frames)
+        with self.scene._batch_calls():
+            for arm, base in (
+                (self.left, self.bases.left),
+                (self.right, self.bases.right),
+                (self.left_ghost, self.bases.left),
+                (self.right_ghost, self.bases.right),
+            ):
+                if arm is not None:
+                    arm.set_base(base)
 
     def resize(self) -> None:
         self.scene.run_method("resize")

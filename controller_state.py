@@ -49,6 +49,7 @@ class ControlCommand:
     side: str = ""
     channel: str = ""
     enabled: bool = False
+    config: object = None
 
 
 class SnapshotStore:

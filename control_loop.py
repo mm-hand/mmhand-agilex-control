@@ -306,7 +306,7 @@ class ArmController:
     def _handle_command(self, command: ControlCommand) -> None:
         if self.phase == "FAULT":
             return
-        if self.phase == "STOPPED" and command.kind not in ("STOP", "DISCONNECT", "RESET", "CONNECT"):
+        if self.phase == "STOPPED" and command.kind not in ("STOP", "DISCONNECT", "RESET", "CONNECT", "APPLY_SETTINGS"):
             return
         if command.kind == "DISCONNECT" and (command.side in self._busy or self.phase == "ALIGNING"):
             return
@@ -320,6 +320,9 @@ class ArmController:
             self._disconnect_side(command.side)
         elif command.kind == "SET_ROS":
             self._set_ros(command.enabled)
+        elif command.kind == "APPLY_SETTINGS" and command.config is not None:
+            self.config = command.config
+            self.bases = arm_base_in_horizon(self.config.frames)
 
     def _connect(self, side: str, channel: str) -> None:
         if side not in SIDES or side in self.real_backends or side in self._busy:

@@ -61,9 +61,9 @@ class RosOutputConfig:
 @dataclass(frozen=True)
 class FrameTransformConfig:
     translation_left_shoulder_to_left_arm_base_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
-    rotation_left_shoulder_to_left_arm_base_rpy_deg: tuple[float, float, float] = (-90.0, 0.0, 90.0)
+    rotation_left_shoulder_to_left_arm_base_rpy_deg: tuple[float, float, float] = (-90.0, -90.0, 90.0)
     translation_right_shoulder_to_right_arm_base_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
-    rotation_right_shoulder_to_right_arm_base_rpy_deg: tuple[float, float, float] = (0.0, 90.0, 0.0)
+    rotation_right_shoulder_to_right_arm_base_rpy_deg: tuple[float, float, float] = (0.0, -90.0, 180.0)
     translation_horizon_to_left_shoulder_m: tuple[float, float, float] = (-0.16, 0.0, 0.0)
     translation_horizon_to_right_shoulder_m: tuple[float, float, float] = (0.16, 0.0, 0.0)
     translation_controller_to_flange_m: tuple[float, float, float] = (0.0, -0.03, 0.065)
@@ -115,8 +115,8 @@ class FilterConfig:
 
 @dataclass(frozen=True)
 class StartupConfig:
-    left_pose_rad: tuple[float, ...] = (-0.241867326795, 1.421239, -0.917729, 1.662461, -0.391128, 0.455112, -0.159994)
-    right_pose_rad: tuple[float, ...] = (1.812663609075084, 1.4212388878235491, 0.9177285130965828, 1.6624601013312166, -2.7504255081459426, 0.4551165007189752, 0.1599672925762848)
+    left_pose_rad: tuple[float, ...] = (-0.045583485, 1.513780534, 0.182135811, 1.005800624, 0.361397527, -0.495527784, -0.838376716)
+    right_pose_rad: tuple[float, ...] = (0.045583485, 1.513780534, -0.182135811, 1.005800624, 2.70, -0.50, 0.785)
     enable_startup_pose: bool = True
 
 
