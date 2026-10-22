@@ -115,8 +115,13 @@ class FilterConfig:
 
 @dataclass(frozen=True)
 class StartupConfig:
-    left_pose_rad: tuple[float, ...] = (-0.045583485, 1.513780534, 0.182135811, 1.005800624, 0.361397527, -0.495527784, -0.838376716)
-    right_pose_rad: tuple[float, ...] = (0.045583485, 1.513780534, -0.182135811, 1.005800624, 2.70, -0.50, 0.785)
+    # The right pose is the mirror image of the left one across the sagittal
+    # plane, mapped onto the right arm's base frame:
+    #   right = (-j1, j2, -j3, j4, -j5 - pi, j6, -j7)
+    # This matches R_right = mirror(R_left) @ Rx(pi) from the base frames below,
+    # so both arms are exactly mirror-symmetric in the horizon frame.
+    left_pose_rad: tuple[float, ...] = (-0.045583485, 1.0471975511965976, 0.182135811, 1.005800624, -1.0471975511965976, -0.495527784, 0.0)
+    right_pose_rad: tuple[float, ...] = (0.045583485, 1.0471975511965976, -0.182135811, 1.005800624, -2.0943951023931953, -0.495527784, 0.0)
     enable_startup_pose: bool = True
 
 
