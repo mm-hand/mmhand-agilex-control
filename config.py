@@ -51,7 +51,7 @@ class GuiConfig:
     host: str = "127.0.0.1"
     port: int = 8080
     port_span: int = 50
-    refresh_hz: float = 10.0
+    refresh_hz: float = 30.0
 
 
 @dataclass(frozen=True)
@@ -95,15 +95,15 @@ class IkConfig:
 @dataclass(frozen=True)
 class OneEuroConfig:
     enabled: bool = True
-    min_cutoff: float = 1.2
-    beta: float = 0.03
+    min_cutoff: float = 3
+    beta: float = 0.05
     d_cutoff: float = 1.0
 
 
 @dataclass(frozen=True)
 class InputLimiterConfig:
     enabled: bool = True
-    max_linear_speed_m_s: float = 1.0
+    max_linear_speed_m_s: float = 2.0
     max_angular_speed_rad_s: float = 4.0
     max_position_step_m: float = 0.04
     max_rotation_step_rad: float = 0.16
@@ -130,9 +130,9 @@ class StartupConfig:
 @dataclass(frozen=True)
 class MotionConfig:
     command_hz: float = 50.0
-    max_joint_step_rad: float = 0.02
+    max_joint_step_rad: float = 0.03
     max_velocity_rad_s: tuple[float, ...] = (0.8, 0.8, 1.0, 1.0, 1.2, 1.2, 1.2)
-    max_acceleration_rad_s2: tuple[float, ...] = (2.0, 2.0, 2.5, 2.5, 3.0, 3.0, 3.0)
+    max_acceleration_rad_s2: tuple[float, ...] = (4.0, 4.0, 5.0, 5.0, 6.0, 6.0, 6.0)
     max_trajectory_duration_s: float = 20.0
     joint_limit_margin_rad: float = 0.035
 
