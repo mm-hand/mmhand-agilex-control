@@ -131,6 +131,21 @@ vendor `python-can-agx-cando` plugin (a `python-can` backend wrapping
 `cando.dll`) must also be installed; it is not on PyPI and ships with the
 AgileX CAN adapter package.
 
+### Install the CAN bring-up/recovery unit (Linux, once per machine)
+
+One-time root setup that keeps `can0`/`can1` usable across replugs, reboots,
+and CAN-cable pulls:
+
+```bash
+sudo bash scripts/can0-persist/install.sh
+```
+
+It installs one systemd unit per channel (brings the interface up whenever the
+USB adapter appears) plus the passwordless-sudo rule that lets `hardware.py`
+bounce a wedged interface automatically during connect. Re-running it is safe.
+Without it everything still works, but recovering from a pulled CAN cable needs
+the manual `sudo systemctl restart can0.service` command.
+
 ### Install adb
 
 `pip install` does not provide adb; install Android Platform-Tools once.
@@ -545,6 +560,16 @@ Coverage includes:
   drops into passive error state for a few seconds. Transient faults are retried
   for `RealArmConfig.can_fault_grace_s` seconds; a fault that outlasts that points
   at wiring, bitrate, or missing 24 V power.
+- The same ERROR-PASSIVE error after unplugging and replugging the CAN cable: the
+  gs_usb adapter wedges in ERROR-PASSIVE/BUS-OFF while the cable is out (frames
+  get no ACK) and never recovers by itself — this adapter rejects `restart-ms`
+  ("Device doesn't support restart from Bus Off"), and replugging the bus cable
+  does not re-run `can0.service` because the USB device never disappeared. After
+  the one-time setup (`sudo bash scripts/can0-persist/install.sh`, see
+  [Installation](#install-the-can-bring-uprecovery-unit-linux-once-per-machine)),
+  `ensure_socketcan_ready()` bounces the unit automatically whenever a connect
+  attempt finds the interface wedged, so replugging no longer requires
+  restarting the terminal. Manual fallback: `sudo systemctl restart can0.service`.
 - Port already in use: `run.py` selects the next free port; pass `--port`,
   `--vr-port`, or `--ipc-port` explicitly if needed.
 - ROS 2 output says `UNAVAILABLE`: the active environment needs `rclpy`,

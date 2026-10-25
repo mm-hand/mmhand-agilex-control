@@ -76,6 +76,63 @@ def _socketcan_state(config: RealArmConfig) -> str | None:
 
 _CAN_FAULT_STATES = frozenset({"ERROR-PASSIVE", "BUS-OFF", "STOPPED"})
 
+def _interface_flags_up(channel: str) -> bool:
+    flags = int((Path("/sys/class/net") / channel / "flags").read_text(encoding="utf-8").strip(), 16)
+    return bool(flags & 0x1)
+
+_interface_reset_lock = threading.Lock()
+_last_interface_reset_at = 0.0
+
+def try_reset_can_interface(config: RealArmConfig, logger: logging.Logger | None = None) -> bool:
+    """Bounce a wedged SocketCAN interface and report whether it recovered.
+
+    Pulling the CAN cable while frames are in flight drives the gs_usb
+    adapter into ERROR-PASSIVE and then BUS-OFF, where it stays wedged until
+    the link is bounced (this adapter rejects restart-ms, so there is no
+    driver-level auto-recovery), and replugging the bus cable does not
+    re-run can0.service because the USB device never disappears.  The
+    per-channel systemd unit performs the bounce (down, reconfigure, up)
+    but needs a passwordless-sudo rule; see scripts/can0-persist.
+    Throttled so connect retries cannot hammer sudo.
+    """
+    global _last_interface_reset_at
+    if config.interface != "socketcan":
+        return False
+    with _interface_reset_lock:
+        now = time.monotonic()
+        if now - _last_interface_reset_at < 2.0:
+            return False
+        _last_interface_reset_at = now
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", "systemctl", "restart", f"{config.channel}.service"],
+            capture_output=True,
+            text=True,
+            timeout=15.0,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        if logger is not None:
+            logger.warning("could not reset SocketCAN interface %r: %s", config.channel, exc)
+        return False
+    if result.returncode != 0:
+        if logger is not None:
+            logger.warning(
+                "could not reset SocketCAN interface %r (sudo exit %s): %s; "
+                "run manually: sudo systemctl restart %s.service "
+                "(one-time setup: sudo bash scripts/can0-persist/install.sh)",
+                config.channel, result.returncode, (result.stderr or "").strip(), config.channel,
+            )
+        return False
+    try:
+        recovered = _socketcan_state(config) not in _CAN_FAULT_STATES and _interface_flags_up(config.channel)
+    except (OSError, RuntimeError):
+        return False
+    if logger is not None:
+        logger.info(
+            "reset SocketCAN interface %r via systemctl; recovered=%s", config.channel, recovered
+        )
+    return recovered
+
 def _raise_for_can_fault(
     config: RealArmConfig,
     fault_since: float | None = None,
@@ -99,7 +156,8 @@ def _raise_for_can_fault(
         return fault_since
     raise RuntimeError(
         f"SocketCAN interface {config.channel!r} entered {state}; stop the arm program, "
-        "reset the CAN interface, and verify bitrate, H/L wiring, power, and passive RX traffic"
+        f"reset the CAN interface (sudo systemctl restart {config.channel}.service), and verify "
+        "bitrate, H/L wiring, power, and passive RX traffic"
     )
 
 def _log_sdk_identity(config: RealArmConfig, logger: logging.Logger) -> None:
@@ -117,22 +175,35 @@ def ensure_socketcan_ready(config: RealArmConfig, logger: logging.Logger | None 
     net_dir = Path("/sys/class/net") / config.channel
     if not net_dir.exists():
         raise RuntimeError(f"SocketCAN interface {config.channel!r} does not exist")
-    flags = int((net_dir / "flags").read_text(encoding="utf-8").strip(), 16)
-    if not flags & 0x1:
-        raise RuntimeError(
-            f"SocketCAN interface {config.channel!r} is DOWN. Run: "
-            f"sudo ip link set {config.channel} type can bitrate {config.bitrate}; "
-            f"sudo ip link set {config.channel} up"
-        )
+    if not _interface_flags_up(config.channel):
+        # A wedged or not-yet-bringed-up interface is recoverable via the
+        # systemd unit, so try that before refusing to start.
+        if not try_reset_can_interface(config, logger):
+            raise RuntimeError(
+                f"SocketCAN interface {config.channel!r} is DOWN. Run: "
+                f"sudo ip link set {config.channel} type can bitrate {config.bitrate}; "
+                f"sudo ip link set {config.channel} up "
+                f"(or: sudo systemctl restart {config.channel}.service)"
+            )
     # A fault left behind by a previous attempt clears itself once frames are
     # acknowledged again, so report it and let the connect path retry instead of
-    # refusing to start before any traffic has been sent.
+    # refusing to start before any traffic has been sent.  A fault left by an
+    # unplugged CAN cable, however, wedges the adapter until the link is
+    # bounced, so attempt that bounce first.
     state = _socketcan_state(config)
-    if state in _CAN_FAULT_STATES and logger is not None:
-        logger.warning(
-            "SocketCAN interface %r is %s; retrying after enabling CAN push",
-            config.channel, state,
-        )
+    if state in _CAN_FAULT_STATES:
+        if logger is not None:
+            logger.warning(
+                "SocketCAN interface %r is %s; attempting automatic reset",
+                config.channel, state,
+            )
+        if try_reset_can_interface(config, logger):
+            state = _socketcan_state(config)
+        elif logger is not None:
+            logger.warning(
+                "SocketCAN interface %r is still %s; retrying after enabling CAN push",
+                config.channel, state,
+            )
 
 def create_robot(config: RealArmConfig, firmware: str):
     AgxArmFactory, ArmModel, _, create_agx_arm_config = _sdk(config)

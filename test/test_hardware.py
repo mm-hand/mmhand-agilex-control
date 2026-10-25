@@ -15,6 +15,8 @@ from hardware import (
     _socketcan_state,
     detect_firmware,
     enable_normal_push,
+    ensure_socketcan_ready,
+    try_reset_can_interface,
     validate_joint_command,
 )
 
@@ -159,6 +161,75 @@ def test_socketcan_state_fails_closed_when_ip_cannot_be_read():
             assert "failed to inspect SocketCAN" in str(exc)
         else:
             raise AssertionError("SocketCAN inspection failure should stop startup")
+
+
+def test_try_reset_can_interface_bounces_systemd_unit():
+    import hardware
+
+    hardware._last_interface_reset_at = 0.0
+    calls = []
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+    with (
+        patch("hardware.subprocess.run", side_effect=fake_run),
+        patch("hardware._socketcan_state", return_value="ERROR-ACTIVE"),
+        patch("hardware._interface_flags_up", return_value=True),
+    ):
+        assert try_reset_can_interface(RealArmConfig()) is True
+    assert calls == [["sudo", "-n", "systemctl", "restart", "can0.service"]]
+
+
+def test_try_reset_can_interface_survives_sudo_failure():
+    import hardware
+
+    hardware._last_interface_reset_at = 0.0
+    result = SimpleNamespace(returncode=1, stdout="", stderr="sudo: a password is required")
+    with patch("hardware.subprocess.run", return_value=result):
+        logger = SimpleNamespace(warning=lambda *args: None)
+        assert try_reset_can_interface(RealArmConfig(), logger) is False
+
+
+def test_try_reset_can_interface_throttles_repeat_bounces():
+    import hardware
+
+    hardware._last_interface_reset_at = 0.0
+    success = SimpleNamespace(returncode=0, stdout="", stderr="")
+    with (
+        patch("hardware.subprocess.run", return_value=success),
+        patch("hardware._socketcan_state", return_value="ERROR-ACTIVE"),
+        patch("hardware._interface_flags_up", return_value=True),
+    ):
+        assert try_reset_can_interface(RealArmConfig()) is True
+        with patch("hardware.subprocess.run", side_effect=AssertionError("sudo should not run twice")):
+            assert try_reset_can_interface(RealArmConfig()) is False  # throttled
+
+
+def test_ensure_socketcan_ready_resets_wedged_interface():
+    with (
+        patch("pathlib.Path.exists", return_value=True),
+        patch("hardware._socketcan_state", side_effect=["ERROR-PASSIVE", "ERROR-ACTIVE"]),
+        patch("hardware._interface_flags_up", return_value=True),
+        patch("hardware.try_reset_can_interface", return_value=True) as reset,
+    ):
+        logger = SimpleNamespace(warning=lambda *args: None, info=lambda *args: None)
+        ensure_socketcan_ready(RealArmConfig(), logger)
+    reset.assert_called_once()
+
+
+def test_ensure_socketcan_ready_raises_when_interface_stays_down():
+    with (
+        patch("pathlib.Path.exists", return_value=True),
+        patch("hardware._interface_flags_up", return_value=False),
+        patch("hardware.try_reset_can_interface", return_value=False),
+    ):
+        try:
+            ensure_socketcan_ready(RealArmConfig())
+        except RuntimeError as exc:
+            assert "is DOWN" in str(exc)
+            assert "systemctl restart can0.service" in str(exc)
+        else:
+            raise AssertionError("a DOWN interface that cannot be reset should stop startup")
 
 
 def test_detect_firmware_selects_v120_without_enable_when_query_succeeds():
