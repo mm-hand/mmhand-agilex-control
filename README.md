@@ -555,6 +555,12 @@ Coverage includes:
   a row disable push again on this firmware, so the connect path spaces them and
   re-arms when the stream stops. A mid-run stall (green feedback ghost frozen at
   an old pose) is now re-requested automatically instead of staying stale.
+- The arm silently stops answering after the laptop suspends or `can0.service`
+  bounces: re-registering the netdev kills the socket the SDK holds, its read
+  thread dies on `ENODEV` (`CanOperationError: Error receiving: No such device`),
+  and the SDK keeps returning the last parsed packet. `RealArmBackend.transport_error()`
+  detects the closed comm, so the controller marks that arm `ERROR`, latches STOP,
+  and logs `lost <side> arm`. Reconnect the arm afterwards; no restart needed.
 - `SocketCAN interface 'can0' entered ERROR-PASSIVE` right after power-up: the arm
   does not acknowledge frames until its controller has booted, so the interface
   drops into passive error state for a few seconds. Transient faults are retried

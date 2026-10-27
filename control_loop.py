@@ -116,6 +116,7 @@ class ArmController:
             self._shutdown()
 
     def _tick(self) -> None:
+        self._drop_dead_arms()
         if self.phase == "STARTUP":
             self._step_startup()
             self._hold_following()
@@ -423,6 +424,36 @@ class ArmController:
             pass
 
     # ------------------------------------------------------------------ telemetry
+    def _drop_dead_arms(self) -> None:
+        """Disconnect arms whose CAN link died, instead of holding a stale pose.
+
+        Suspending the laptop or bouncing can0.service re-registers the netdev;
+        the SDK socket dies and its read thread exits.  Without this check the
+        arm keeps looking connected and simply stops answering, so motion would
+        be commanded into a dead link forever.
+        """
+        for side, backend in list(self.real_backends.items()):
+            if side in self._busy or self.phase == "ALIGNING":
+                continue
+            check = getattr(backend, "transport_error", None)
+            if not callable(check):
+                continue
+            error = check()
+            if error is None:
+                continue
+            self.logger.error("lost %s arm: %s", side, error)
+            del self.real_backends[side]
+            self.following.discard(side)
+            self.real_q[side] = None
+            self._last_hold[side] = self.sim_q[side].copy()
+            self.arm_status[side] = ArmStatus(
+                state="ERROR",
+                channel=getattr(backend, "config", self.config.real).channel,
+                error=error,
+            )
+            self._executor.submit(self._close_worker, backend)
+            self._stop_all(reason=f"{side} arm CAN link lost")
+
     def _refresh_feedback(self) -> None:
         for side, backend in self.real_backends.items():
             if side in self._busy:

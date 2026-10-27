@@ -544,7 +544,30 @@ class RealArmBackend:
         with self.feedback_lock:
             joint_q, joint_timestamp, motor_q, motor_timestamps = self.latest_feedback_sample
             return joint_q.copy(), joint_timestamp, motor_q.copy(), motor_timestamps.copy()
+    def transport_error(self) -> str | None:
+        """Return a message when the CAN link itself is gone, else None.
+
+        A reopened SocketCAN netdev (resume from suspend, can0.service bounce)
+        invalidates the socket the SDK holds: its read thread dies on ENODEV and
+        closes the comm, but every accessor keeps serving the last parsed
+        packet, so the arm looks connected and merely "stale" forever.  A soft
+        error (ENOBUFS/ENETDOWN) leaves the comm open and clears itself, so only
+        a closed comm counts as a dead link.
+        """
+        is_connected = getattr(self.robot, "is_connected", None)
+        if not callable(is_connected):
+            return None
+        try:
+            if not is_connected():
+                return f"CAN transport on {self.config.channel} closed (device re-registered or unplugged)"
+        except Exception as exc:
+            return f"CAN transport unusable: {exc}"
+        return None
+
     def refresh_feedback(self) -> bool:
+        dead = self.transport_error()
+        if dead is not None:
+            raise RuntimeError(dead)
         feedback = read_feedback_sample(self.robot)
         if feedback is None:
             self._warn_feedback("missing or invalid joint-angle or motor-state packet")

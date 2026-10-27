@@ -23,6 +23,10 @@ class FakeArm:
         self.holds = []
         self.sent = []
         self.closed = False
+        self.transport_dead = None
+
+    def transport_error(self):
+        return self.transport_dead
 
     def move_j_startup(self, side, q, stop_event=None) -> bool:
         if stop_event is not None and stop_event.is_set():
@@ -182,3 +186,19 @@ def test_start_without_connected_arm_returns_to_teleop():
         _wait(lambda: store.read().can_reset)
         controller.submit(ControlCommand("RESET"))
         _wait(lambda: store.read().phase == "TELEOP")
+
+
+def test_dead_can_link_disconnects_arm_and_latches_stop():
+    with _controller() as (controller, store, arms):
+        _wait(lambda: store.read().phase == "TELEOP")
+        controller.submit(ControlCommand("CONNECT", side="left", channel="can0"))
+        _wait(lambda: store.read().phase == "STOPPED")
+        controller.submit(ControlCommand("RESET"))
+        _wait(lambda: store.read().phase == "TELEOP")
+        _wait(lambda: bool(arms["left"].sent))
+        arms["left"].transport_dead = "CAN transport on can0 closed"
+        _wait(lambda: store.read().arm_status["left"].state == "ERROR")
+        _wait(lambda: store.read().phase == "STOPPED")
+        assert "CAN transport" in (store.read().arm_status["left"].error or "")
+        _wait(lambda: arms["left"].closed)
+        assert store.read().real_q["left"] is None

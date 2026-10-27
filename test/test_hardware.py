@@ -520,3 +520,23 @@ if __name__ == "__main__":
     test_startup_move_aborts_when_stopped()
     test_servo_handoff_aborts_when_stopped()
     print("All hardware tests passed.")
+
+
+def test_refresh_feedback_raises_when_can_transport_closed():
+    backend, robot = _backend()
+    assert backend.transport_error() is None  # fake has no is_connected()
+    robot.is_connected = lambda: False
+    assert "can0" in (backend.transport_error() or "")
+    try:
+        backend.refresh_feedback()
+    except RuntimeError as exc:
+        assert "closed" in str(exc)
+    else:
+        raise AssertionError("a closed CAN transport must not look like stale feedback")
+
+
+def test_refresh_feedback_survives_soft_can_errors():
+    backend, robot = _backend()
+    robot.is_connected = lambda: True
+    assert backend.transport_error() is None
+    assert backend.refresh_feedback() is True
