@@ -8,7 +8,7 @@ from config import ControlConfig
 from controller_state import ArmStatus, ControlSnapshot, SnapshotStore
 from logging_utils import LogBuffer
 from nicegui import ui
-from ui.app import TABS, _pico_state, build_page, status_background
+from ui.app import TABS, _pico_state, build_page, margin_background, status_background
 from ui.scene import CAMERA_FOV, CAMERA_POSITION
 
 UI = Path(__file__).resolve().parents[1] / "ui"
@@ -60,6 +60,15 @@ def test_status_colors_cover_running_waiting_and_fault_states():
     assert status_background("WAITING") == "#fde68a"
     assert status_background("STOPPED") == "#fecaca"
     assert status_background("SIM") == "#e2e8f0"
+
+
+def test_limit_margin_colors():
+    assert margin_background(None) == "#e2e8f0"
+    assert margin_background(0.0) == "#fecaca"
+    assert margin_background(-1.0) == "#fecaca"
+    assert margin_background(5.0) == "#fde68a"
+    assert margin_background(10.0) == "#fde68a"
+    assert margin_background(10.1) == "#bbf7d0"
 
 
 def test_pico_state_requires_live_frames():

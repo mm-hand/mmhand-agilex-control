@@ -71,7 +71,7 @@ class FrameTransformConfig:
     translation_controller_to_flange_m: tuple[float, float, float] = (0.0, -0.03, 0.065)
     rotation_controller_to_flange_rpy_deg: tuple[float, float, float] = (0.0, -180.0, 90.0)
     human_size_m: float = 1.0
-    robot_size_m: float = 1.45
+    robot_size_m: float = 1.9
 
 
 @dataclass(frozen=True)
@@ -131,8 +131,8 @@ class StartupConfig:
 class MotionConfig:
     command_hz: float = 50.0
     max_joint_step_rad: float = 0.03
-    max_velocity_rad_s: tuple[float, ...] = (0.8, 0.8, 1.0, 1.0, 1.2, 1.2, 1.2)
-    max_acceleration_rad_s2: tuple[float, ...] = (4.0, 4.0, 5.0, 5.0, 6.0, 6.0, 6.0)
+    max_velocity_rad_s: tuple[float, ...] = (0.4, 0.4, 0.4, 0.4, 0.5, 0.5, 0.5)
+    max_acceleration_rad_s2: tuple[float, ...] = (1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
     max_trajectory_duration_s: float = 20.0
     joint_limit_margin_rad: float = 0.035
 

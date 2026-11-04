@@ -41,6 +41,7 @@ class ControlSnapshot:
     ros: dict = field(default_factory=dict)
     error: str | None = None
     can_reset: bool = False
+    joint_margin_deg: float | None = None
 
 
 @dataclass(frozen=True)

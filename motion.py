@@ -3,10 +3,13 @@ from dataclasses import dataclass
 import numpy as np
 from config import MotionConfig
 from ik_solver import NeroParams
-def joint_limits_with_margin(config: MotionConfig) -> tuple[np.ndarray, np.ndarray]:
+def joint_limits() -> tuple[np.ndarray, np.ndarray]:
     limits = np.asarray(NeroParams.default().joint_limits, dtype=float)
+    return limits[:, 0].copy(), limits[:, 1].copy()
+def joint_limits_with_margin(config: MotionConfig) -> tuple[np.ndarray, np.ndarray]:
+    lower, upper = joint_limits()
     margin = float(config.joint_limit_margin_rad)
-    return limits[:, 0] + margin, limits[:, 1] - margin
+    return lower + margin, upper - margin
 def clip_to_joint_limits(q: np.ndarray, config: MotionConfig) -> np.ndarray:
     lo, hi = joint_limits_with_margin(config)
     return np.clip(np.asarray(q, dtype=float).reshape(7), lo, hi)

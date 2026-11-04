@@ -188,6 +188,14 @@ def test_start_without_connected_arm_returns_to_teleop():
         _wait(lambda: store.read().phase == "TELEOP")
 
 
+def test_snapshot_reports_tightest_limit_margin():
+    with _controller() as (controller, store, _arms):
+        _wait(lambda: store.read().phase == "TELEOP")
+        _wait(lambda: store.read().joint_margin_deg is not None)
+        margin = store.read().joint_margin_deg
+        assert margin is not None and margin >= 0.0
+
+
 def test_dead_can_link_disconnects_arm_and_latches_stop():
     with _controller() as (controller, store, arms):
         _wait(lambda: store.read().phase == "TELEOP")

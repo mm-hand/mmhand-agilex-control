@@ -15,7 +15,7 @@ from filters import JointTargetFilter, PoseFilter, PoseInputLimiter
 from frames import CoordinateFrames, ControllerPose, arm_base_in_horizon, build_coordinate_frames
 from hardware import RealArmBackend
 from ik import NeroIK
-from motion import ArmMotionPlanner, joint_trajectory
+from motion import ArmMotionPlanner, joint_limits, joint_trajectory
 from ros_output import RosOutput
 
 SIDES = ("left", "right")
@@ -84,6 +84,9 @@ class ArmController:
         self._limiters = {}
         self._target_filters = {}
         self._planners = {}
+        self._hold_states: dict[str, tuple[str, float]] = {}
+        self._joint_limits = joint_limits()
+        self._joint_margin_deg: dict[str, float | None] = {side: None for side in SIDES}
         store.publish(ControlSnapshot())
 
     def start(self) -> None:
@@ -247,6 +250,7 @@ class ArmController:
         self._target_filters = {side: JointTargetFilter(self.config.filters.ik_output) for side in SIDES}
         self._planners = {side: ArmMotionPlanner(self.config.motion, starts[side]) for side in SIDES}
         self._last_hold = {side: starts[side].copy() for side in SIDES}
+        self._joint_margin_deg = {side: None for side in SIDES}
         self.phase = "TELEOP"
         self.logger.info("teleop started following=%s", ",".join(sorted(self.following)) or "none")
 
@@ -261,10 +265,23 @@ class ArmController:
         commands = {}
         for side in SIDES:
             target = None
+            reason = None
             frame = getattr(frames, side)
-            if frame is not None:
+            if poses[side] is None:
+                reason = "no PICO pose (tracking lost or frame older than max_pose_age_s)"
+            elif frame is None:
+                reason = "coordinate frame unavailable"
+            else:
                 target = self.iks[side].solve(frame.transform_arm_base_to_flange)
-                target = self._target_filters[side].apply(target, now)
+                if target is None:
+                    reason = "IK found no solution inside the joint limits (target out of workspace)"
+                    self._joint_margin_deg[side] = 0.0
+                else:
+                    lower, upper = self._joint_limits
+                    margin = float(np.min(np.minimum(target - lower, upper - target)))
+                    self._joint_margin_deg[side] = float(np.degrees(margin))
+                    target = self._target_filters[side].apply(target, now)
+            self._note_hold(side, reason, now)
             commands[side] = self._planners[side].step(target, now)
         for side in self.following:
             backend = self.real_backends.get(side)
@@ -280,6 +297,25 @@ class ArmController:
         for side in SIDES:
             self.sim_q[side] = commands[side].copy()
             self._last_hold[side] = commands[side].copy()
+
+    def _note_hold(self, side: str, reason: str | None, now: float) -> None:
+        """Log why a following arm is holding, instead of freezing silently.
+
+        A missing pose or an unreachable IK target makes the planner hold the
+        last command; without this the arm simply stops and nothing explains it.
+        """
+        if side not in self.following:
+            return
+        last_reason, last_logged = self._hold_states.get(side, (None, 0.0))
+        if reason is None:
+            if last_reason is not None:
+                self.logger.info("teleop target recovered side=%s", side)
+                del self._hold_states[side]
+            return
+        if reason == last_reason and now - last_logged < 5.0:
+            return
+        self.logger.warning("teleop holding %s arm: %s", side, reason)
+        self._hold_states[side] = (reason, now)
 
     def _hold_following(self) -> None:
         for side in self.following:
@@ -500,8 +536,15 @@ class ArmController:
                 and not self._busy
                 and not self._align_futures
                 and not self._connect_futures,
+                joint_margin_deg=self._tightest_margin_deg(),
             )
         )
+
+    def _tightest_margin_deg(self) -> float | None:
+        """Smallest joint-limit margin of the targeted pose, across active arms."""
+        sides = self.following or SIDES
+        values = [self._joint_margin_deg[side] for side in sides if self._joint_margin_deg[side] is not None]
+        return min(values) if values else None
 
     # ------------------------------------------------------------------ failure
     def _fail(self, message: str, exc: Exception) -> None:

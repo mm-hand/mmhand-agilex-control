@@ -64,6 +64,16 @@ def status_background(value: str) -> str:
     return "#e2e8f0"
 
 
+def margin_background(margin_deg: float | None) -> str:
+    if margin_deg is None:
+        return "#e2e8f0"
+    if margin_deg <= 0.0:
+        return "#fecaca"
+    if margin_deg <= 10.0:
+        return "#fde68a"
+    return "#bbf7d0"
+
+
 def _pico_state(pico: dict) -> str:
     if pico.get("adb") == "error":
         return "ERROR"
@@ -163,6 +173,7 @@ def build_page(controller, store, config, log_buffer: LogBuffer) -> None:
                 "Left Arm": ui.label().classes("status-chip text-xs"),
                 "Right Arm": ui.label().classes("status-chip text-xs"),
                 "ROS 2": ui.label().classes("status-chip text-xs"),
+                "Joint Limit Margin": ui.label().classes("status-chip text-xs"),
             }
 
         with ui.tabs(value=TABS[0]).classes("console-tabs w-full").props("dense no-caps active-color=primary") as tabs:
@@ -231,6 +242,12 @@ def build_page(controller, store, config, log_buffer: LogBuffer) -> None:
             chips[name].set_text(f"{name}: {value}")
             chips[name].style(f"background-color:{status_background(value)}")
 
+        margin = snapshot.joint_margin_deg
+        chips["Joint Limit Margin"].set_text(
+            "Joint Limit Margin: --" if margin is None else f"Joint Limit Margin: {margin:.1f}°"
+        )
+        chips["Joint Limit Margin"].style(f"background-color:{margin_background(margin)}")
+
         stopped = system == "STOPPED"
         fault = system == "FAULT"
         aligning = system == "ALIGNING"
@@ -292,4 +309,5 @@ def run_ui(controller, store, config, log_buffer: LogBuffer, port: int, show: bo
         show=show,
         reload=False,
         title="AgileX Nero Teleop",
+        favicon="🦾",
     )
