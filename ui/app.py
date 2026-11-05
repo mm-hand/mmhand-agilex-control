@@ -74,6 +74,13 @@ def margin_background(margin_deg: float | None) -> str:
     return "#bbf7d0"
 
 
+def margin_text(margin_deg: float | None, joint_index: int | None) -> str:
+    if margin_deg is None:
+        return "Joint Limit Margin: --"
+    joint = f"J{joint_index + 1} " if joint_index is not None else ""
+    return f"Joint Limit Margin: {joint}{margin_deg:.1f}°"
+
+
 def _pico_state(pico: dict) -> str:
     if pico.get("adb") == "error":
         return "ERROR"
@@ -244,7 +251,7 @@ def build_page(controller, store, config, log_buffer: LogBuffer) -> None:
 
         margin = snapshot.joint_margin_deg
         chips["Joint Limit Margin"].set_text(
-            "Joint Limit Margin: --" if margin is None else f"Joint Limit Margin: {margin:.1f}°"
+            margin_text(margin, snapshot.joint_margin_index)
         )
         chips["Joint Limit Margin"].style(f"background-color:{margin_background(margin)}")
 

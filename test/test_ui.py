@@ -8,7 +8,7 @@ from config import ControlConfig
 from controller_state import ArmStatus, ControlSnapshot, SnapshotStore
 from logging_utils import LogBuffer
 from nicegui import ui
-from ui.app import TABS, _pico_state, build_page, margin_background, status_background
+from ui.app import TABS, _pico_state, build_page, margin_background, margin_text, status_background
 from ui.scene import CAMERA_FOV, CAMERA_POSITION
 
 UI = Path(__file__).resolve().parents[1] / "ui"
@@ -69,6 +69,13 @@ def test_limit_margin_colors():
     assert margin_background(5.0) == "#fde68a"
     assert margin_background(10.0) == "#fde68a"
     assert margin_background(10.1) == "#bbf7d0"
+
+
+def test_limit_margin_text_shows_tightest_joint():
+    assert margin_text(None, None) == "Joint Limit Margin: --"
+    assert margin_text(8.4, 5) == "Joint Limit Margin: J6 8.4°"
+    assert margin_text(0.0, 1) == "Joint Limit Margin: J2 0.0°"
+    assert margin_text(12.0, None) == "Joint Limit Margin: 12.0°"
 
 
 def test_pico_state_requires_live_frames():

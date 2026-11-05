@@ -42,6 +42,7 @@ class ControlSnapshot:
     error: str | None = None
     can_reset: bool = False
     joint_margin_deg: float | None = None
+    joint_margin_index: int | None = None
 
 
 @dataclass(frozen=True)

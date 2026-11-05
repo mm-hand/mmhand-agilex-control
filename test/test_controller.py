@@ -192,8 +192,10 @@ def test_snapshot_reports_tightest_limit_margin():
     with _controller() as (controller, store, _arms):
         _wait(lambda: store.read().phase == "TELEOP")
         _wait(lambda: store.read().joint_margin_deg is not None)
-        margin = store.read().joint_margin_deg
-        assert margin is not None and margin >= 0.0
+        snapshot = store.read()
+        assert snapshot.joint_margin_deg is not None and snapshot.joint_margin_deg >= 0.0
+        assert snapshot.joint_margin_index is not None
+        assert 0 <= snapshot.joint_margin_index <= 6
 
 
 def test_dead_can_link_disconnects_arm_and_latches_stop():

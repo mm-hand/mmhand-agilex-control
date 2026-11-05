@@ -87,6 +87,7 @@ class ArmController:
         self._hold_states: dict[str, tuple[str, float]] = {}
         self._joint_limits = joint_limits()
         self._joint_margin_deg: dict[str, float | None] = {side: None for side in SIDES}
+        self._joint_margin_index: dict[str, int | None] = {side: None for side in SIDES}
         store.publish(ControlSnapshot())
 
     def start(self) -> None:
@@ -251,6 +252,7 @@ class ArmController:
         self._planners = {side: ArmMotionPlanner(self.config.motion, starts[side]) for side in SIDES}
         self._last_hold = {side: starts[side].copy() for side in SIDES}
         self._joint_margin_deg = {side: None for side in SIDES}
+        self._joint_margin_index = {side: None for side in SIDES}
         self.phase = "TELEOP"
         self.logger.info("teleop started following=%s", ",".join(sorted(self.following)) or "none")
 
@@ -278,8 +280,9 @@ class ArmController:
                     self._joint_margin_deg[side] = 0.0
                 else:
                     lower, upper = self._joint_limits
-                    margin = float(np.min(np.minimum(target - lower, upper - target)))
-                    self._joint_margin_deg[side] = float(np.degrees(margin))
+                    margins = np.minimum(target - lower, upper - target)
+                    self._joint_margin_index[side] = int(np.argmin(margins))
+                    self._joint_margin_deg[side] = float(np.degrees(margins[self._joint_margin_index[side]]))
                     target = self._target_filters[side].apply(target, now)
             self._note_hold(side, reason, now)
             commands[side] = self._planners[side].step(target, now)
@@ -518,6 +521,7 @@ class ArmController:
             "left": _controller_snapshot(self.pose_source.get_left(), buttons[0]),
             "right": _controller_snapshot(self.pose_source.get_right(), buttons[1]),
         }
+        margin_deg, margin_index = self._tightest_margin()
         self.store.publish(
             ControlSnapshot(
                 phase=self.phase,
@@ -536,15 +540,24 @@ class ArmController:
                 and not self._busy
                 and not self._align_futures
                 and not self._connect_futures,
-                joint_margin_deg=self._tightest_margin_deg(),
+                joint_margin_deg=margin_deg,
+                joint_margin_index=margin_index,
             )
         )
 
-    def _tightest_margin_deg(self) -> float | None:
+    def _tightest_margin(self) -> tuple[float | None, int | None]:
         """Smallest joint-limit margin of the targeted pose, across active arms."""
         sides = self.following or SIDES
-        values = [self._joint_margin_deg[side] for side in sides if self._joint_margin_deg[side] is not None]
-        return min(values) if values else None
+        best_value = None
+        best_index = None
+        for side in sides:
+            value = self._joint_margin_deg[side]
+            if value is None:
+                continue
+            if best_value is None or value < best_value:
+                best_value = value
+                best_index = self._joint_margin_index[side]
+        return best_value, best_index
 
     # ------------------------------------------------------------------ failure
     def _fail(self, message: str, exc: Exception) -> None:
