@@ -420,7 +420,7 @@ servo hold, and then follow the teleoperation targets.
 Line counts are total file lines, including blank lines and comments.
 
 ```text
-analytic_control/
+mmhand-agilex-control/
 ├── run.py                              183
 ├── config.py                           177
 ├── control_loop.py                     494
